@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShopEarn | Smart Ecommerce</title>
+
+  <!-- Favicon -->
+  <link rel="icon" href="https://img.icons8.com/fluency/48/shopping-bag.png" />
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet" />
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Firebase Compat v10 -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+
+
+  <!-- Firebase Init (replace with your config) -->
+  <script>
+    const firebaseConfig = {
+      apiKey:            "AIzaSyCgnHRtenBe0K48Y7KaoNieGy-HOvAjpO4",
+      authDomain:        "bazaarprodemo.firebaseapp.com",
+      projectId:         "bazaarprodemo",
+      storageBucket:     "bazaarprodemo.firebasestorage.app",
+      messagingSenderId: "500919238869",
+      appId:             "1:500919238869:web:31671197977bacf8c9625c",
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db   = firebase.firestore();
+    const auth = firebase.auth();
+  </script>
+</head>
+
+<body>
+
+<!-- ======================================================
+     TOAST NOTIFICATION
+====================================================== -->
+<div id="toast" class="toast" aria-live="polite"></div>
+
+<!-- ======================================================
+     AUTH OVERLAY  (Login / Register)
+====================================================== -->
+<div id="authOverlay" class="overlay active">
+  <div class="auth-card">
+
+    <!-- Logo -->
+    <div class="auth-logo">
+      <span class="material-icons-round">shopping_bag</span>
+      <span>ShopEarn</span>
+    </div>
+    <p class="auth-tagline">Shop. Refer. Earn. Repeat.</p>
+
+    <!-- Tabs -->
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab('login')">Login</button>
+      <button class="auth-tab" onclick="switchAuthTab('register')">Register</button>
+    </div>
+
+    <!-- Login Form -->
+    <div id="loginForm" class="auth-form active">
+      <div class="input-group">
+        <span class="material-icons-round">email</span>
+        <input type="email" id="loginEmail" placeholder="Email address" autocomplete="email" />
+      </div>
+      <div class="input-group">
+        <span class="material-icons-round">lock</span>
+        <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password" />
+        <span class="material-icons-round toggle-pw" onclick="togglePw('loginPassword')">visibility</span>
+      </div>
+      <div class="auth-meta">
+        <a href="#" onclick="showPage('forgot')">Forgot password?</a>
+      </div>
+      <button class="btn-primary full-width" onclick="loginUser()">
+        <span class="material-icons-round">login</span> Sign In
+      </button>
+      <div class="divider"><span>or</span></div>
+      <button class="btn-google" onclick="loginWithGoogle()">
+        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" />
+        Continue with Google
+      </button>
+    </div>
+
+    <!-- Register Form -->
+    <div id="registerForm" class="auth-form">
+      <div class="input-group">
+        <span class="material-icons-round">person</span>
+        <input type="text" id="regName" placeholder="Full name" />
+      </div>
+      <div class="input-group">
+        <span class="material-icons-round">email</span>
+        <input type="email" id="regEmail" placeholder="Email address" autocomplete="email" />
+      </div>
+      <div class="input-group">
+        <span class="material-icons-round">lock</span>
+        <input type="password" id="regPassword" placeholder="Password (min 6 chars)" autocomplete="new-password" />
+        <span class="material-icons-round toggle-pw" onclick="togglePw('regPassword')">visibility</span>
+      </div>
+      
+      <button class="btn-primary full-width" onclick="registerUser()">
+        <span class="material-icons-round">person_add</span> Create Account
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ======================================================
+     MAIN APP  (hidden until login)
+====================================================== -->
+<div id="appShell" class="hidden">
+
+  <!-- ─── HEADER ─── -->
+  <header class="header">
+    <div class="header-left">
+      <button class="icon-btn mobile-menu-btn" onclick="toggleSidebar()">
+        <span class="material-icons-round">menu</span>
+      </button>
+      <a class="logo" onclick="showPage('home')">
+        <img src="https://img.icons8.com/fluency/48/shopping-bag.png" 
+          style="width:28px;height:28px;object-fit:contain" alt="Logo" />
+        <span style="
+          font-size:18px;
+          font-weight:900;
+          background: linear-gradient(135deg, #6366f1, #ec4899);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          letter-spacing:0.5px;
+        ">ShopEarn</span>
+      </a>
+    </div>
+
+    <div class="search-box">
+      <span class="material-icons-round">search</span>
+      <input type="text" id="searchInput" placeholder="Search products, brands and more…" oninput="handleSearch(this.value)" />
+      <button class="icon-btn" onclick="clearSearch()" id="clearSearchBtn" style="display:none">
+        <span class="material-icons-round">close</span>
+      </button>
+    </div>
+
+    <div class="header-right">
+      <button class="icon-btn" onclick="showPage('notifications')" title="Notifications">
+        <span class="material-icons-round">notifications</span>
+        <span class="badge" id="notifBadge" style="display:none">0</span>
+      </button>
+      <button class="icon-btn" onclick="showPage('wishlist')" title="Wishlist">
+        <span class="material-icons-round">favorite_border</span>
+        <span class="badge" id="wishlistBadge" style="display:none">0</span>
+      </button>
+      <button class="icon-btn" onclick="showPage('cart')" title="Cart">
+        <span class="material-icons-round">shopping_cart</span>
+        <span class="badge" id="cartBadge" style="display:none">0</span>
+      </button>
+      <div class="avatar-btn" onclick="showPage('profile')" title="My Account">
+        <img id="headerAvatar" src="https://ui-avatars.com/api/?name=U&background=6366f1&color=fff&size=40" alt="Avatar" />
+      </div>
+    </div>
+  </header>
+
+  <!-- ─── MOBILE NAV ─── -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" onclick="showPage('home')" data-page="home">
+      <span class="material-icons-round">home</span>
+      <span>Home</span>
+    </button>
+    <button class="nav-item" onclick="showPage('shop')" data-page="shop">
+      <span class="material-icons-round">storefront</span>
+      <span>Shop</span>
+    </button>
+    <button class="nav-item" onclick="showPage('orders')" data-page="orders">
+      <span class="material-icons-round">receipt_long</span>
+      <span>Orders</span>
+    </button>
+    <button class="nav-item" onclick="showPage('wallet')" data-page="wallet">
+      <span class="material-icons-round">account_balance_wallet</span>
+      <span>Wallet</span>
+    </button>
+    <button class="nav-item" onclick="showPage('profile')" data-page="profile">
+      <span class="material-icons-round">person</span>
+      <span>Me</span>
+    </button>
+  </nav>
+
+  <!-- ─── SIDEBAR (mobile slide-in) ─── -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <img src="https://img.icons8.com/fluency/48/shopping-bag.png" 
+          style="width:36px;height:36px;object-fit:contain" alt="Logo" />
+        <span style="
+          font-size:20px;
+          font-weight:900;
+          background: linear-gradient(135deg, #6366f1, #ec4899);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          letter-spacing:0.5px;
+        ">ShopEarn</span>
+      </div>
+      <button class="icon-btn" onclick="toggleSidebar()">
+        <span class="material-icons-round">close</span>
+      </button>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="sidebar-link" onclick="showPage('home');toggleSidebar()"><span class="material-icons-round">home</span>Home</a>
+      <a class="sidebar-link" onclick="showPage('shop');toggleSidebar()"><span class="material-icons-round">storefront</span>Shop</a>
+      <a class="sidebar-link" onclick="showPage('categories');toggleSidebar()"><span class="material-icons-round">category</span>Categories</a>
+      <a class="sidebar-link" onclick="showPage('orders');toggleSidebar()"><span class="material-icons-round">receipt_long</span>My Orders</a>
+      <a class="sidebar-link" onclick="showPage('wallet');toggleSidebar()"><span class="material-icons-round">account_balance_wallet</span>Wallet</a>
+      <a class="sidebar-link" onclick="showPage('wishlist');toggleSidebar()"><span class="material-icons-round">favorite</span>Wishlist</a>
+      <a class="sidebar-link" onclick="showPage('cart');toggleSidebar()"><span class="material-icons-round">shopping_cart</span>Cart</a>
+      <a class="sidebar-link" onclick="showPage('referral');toggleSidebar()"><span class="material-icons-round">people</span>Referrals</a>
+      <a class="sidebar-link" onclick="showPage('profile');toggleSidebar()"><span class="material-icons-round">manage_accounts</span>Profile</a>
+      <a class="sidebar-link danger" onclick="logoutUser()"><span class="material-icons-round">logout</span>Logout</a>
+    </nav>
+  </aside>
+  <div id="sidebarOverlay" class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+  <!-- ─── PAGE CONTAINER ─── -->
+  <main class="page-container">
+
+    <!-- ══ HOME PAGE ══ -->
+    <section id="homePage" class="tab-panel active">
+
+      <!-- Hero Banner -->
+      <div class="hero-banner">
+        <div class="hero-content">
+          <span class="hero-badge">🎉 New Season Sale</span>
+          <h1>Shop Smart,<br /><span>Earn More</span></h1>
+          <p>Refer friends, unlock commissions and grow your income while you shop.</p>
+          <div class="hero-actions">
+            <button class="btn-primary" onclick="showPage('shop')">
+              <span class="material-icons-round">storefront</span> Shop Now
+            </button>
+            <button class="btn-outline" onclick="showPage('referral')">
+              <span class="material-icons-round">people</span> Refer &amp; Earn
+            </button>
+          </div>
+        </div>
+        <div class="hero-visual">
+          <div class="earn-card floating">
+            <span class="material-icons-round">trending_up</span>
+            <div>
+              <span class="earn-label">Your Earnings</span>
+              <span class="earn-amount" id="heroEarnings">₨ 0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-item">
+          <span class="material-icons-round">group</span>
+          <div><strong id="statReferrals">0</strong><span>Referrals</span></div>
+        </div>
+        <div class="stat-item">
+          <span class="material-icons-round">shopping_bag</span>
+          <div><strong id="statOrders">0</strong><span>Orders</span></div>
+        </div>
+        <div class="stat-item">
+          <span class="material-icons-round">account_balance_wallet</span>
+          <div><strong id="statWallet">₨ 0</strong><span>Wallet</span></div>
+        </div>
+        <div class="stat-item">
+          <span class="material-icons-round">star</span>
+          <div><strong id="statLevel">Starter</strong><span>Level</span></div>
+        </div>
+      </div>
+
+      <!-- Categories -->
+      <div class="section-header">
+        <h2 class="section-title">Browse Categories</h2>
+        <a class="see-all" onclick="showPage('categories')">See all</a>
+      </div>
+      <div class="categories-scroll" id="categoriesScroll"></div>
+
+      <!-- Flash Sale Countdown -->
+      <div class="flash-sale-banner">
+        <div class="flash-info">
+          <span class="material-icons-round">bolt</span>
+          <div>
+            <h3>Flash Sale</h3>
+            <p>Deals ending soon</p>
+          </div>
+        </div>
+        <div class="countdown" id="countdown">
+          <div class="cd-unit"><span id="cdH">00</span><small>hrs</small></div>
+          <div class="cd-unit"><span id="cdM">00</span><small>min</small></div>
+          <div class="cd-unit"><span id="cdS">00</span><small>sec</small></div>
+        </div>
+      </div>
+
+      <!-- Trending Products -->
+      <div class="section-header">
+        <h2 class="section-title">🔥 Trending</h2>
+        <a class="see-all" onclick="showPage('shop')">See all</a>
+      </div>
+      <div id="homeProductGrid" class="product-grid"></div>
+
+      <!-- Referral CTA Banner -->
+      <div class="referral-cta">
+        <div class="referral-cta-text">
+          <h3>Invite Friends &amp; Earn</h3>
+          <p>Earn <strong>10%</strong> on Level 1 and <strong>5%</strong> on Level 2 commissions automatically.</p>
+        </div>
+        <button class="btn-primary" onclick="showPage('referral')">
+          <span class="material-icons-round">share</span> Start Referring
+        </button>
+      </div>
+
+    </section>
+
+    <!-- ══ SHOP PAGE ══ -->
+    <section id="shopPage" class="tab-panel">
+      <div class="shop-toolbar">
+        <h2 class="section-title">🛍️ All Products</h2>
+        <div class="toolbar-actions">
+          <select id="shopSort" class="select-input" onchange="sortProducts(this.value)">
+            <option value="default">Sort: Default</option>
+            <option value="price-asc">Price: Low → High</option>
+            <option value="price-desc">Price: High → Low</option>
+            <option value="name-asc">Name: A → Z</option>
+          </select>
+          <button class="icon-btn" onclick="toggleFilter()" title="Filter">
+            <span class="material-icons-round">tune</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter Panel -->
+      <div id="filterPanel" class="filter-panel hidden">
+        <div class="filter-group">
+          <label>Category</label>
+          <div id="filterCategories" class="filter-chips"></div>
+        </div>
+        <div class="filter-group">
+          <label>Price Range</label>
+          <div class="price-range">
+            <input type="number" id="priceMin" placeholder="Min ₨" class="select-input" />
+            <span>–</span>
+            <input type="number" id="priceMax" placeholder="Max ₨" class="select-input" />
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button class="btn-outline" onclick="clearFilters()">Clear</button>
+          <button class="btn-primary" onclick="applyFilters()">Apply</button>
+        </div>
+      </div>
+
+      <div id="shopProductGrid" class="product-grid"></div>
+    </section>
+
+    <!-- ══ PRODUCT DETAIL PAGE ══ -->
+    <section id="productPage" class="tab-panel">
+      <button class="back-btn" onclick="showPage('shop')">
+        <span class="material-icons-round">arrow_back</span> Back
+      </button>
+      <div id="productDetail" class="product-detail"></div>
+    </section>
+
+    <!-- ══ CART PAGE ══ -->
+    <section id="cartPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">shopping_cart</span> Your Cart
+      </h2>
+      <div class="cart-layout">
+        <div id="cartItems" class="cart-items"></div>
+        <div class="cart-summary" id="cartSummary">
+          <h3>Order Summary</h3>
+          <div class="summary-row"><span>Subtotal</span><span id="cartSubtotal">₨ 0</span></div>
+          <div class="summary-row"><span>Shipping</span><span id="cartShipping">₨ 0</span></div>
+          <div class="summary-row discount"><span>Wallet Discount</span><span id="cartDiscount">– ₨ 0</span></div>
+          <div class="summary-row total"><span>Total</span><span id="cartTotal">₨ 0</span></div>
+          <div class="wallet-toggle">
+            <label>
+              <input type="checkbox" id="useWalletCheck" onchange="toggleWalletUse(this.checked)" />
+              Use wallet balance
+            </label>
+            <span id="walletAvailable">(₨ 0 available)</span>
+          </div>
+          <button class="btn-primary full-width" onclick="proceedToCheckout()">
+            <span class="material-icons-round">payment</span> Proceed to Checkout
+          </button>
+          <button class="btn-outline full-width" onclick="showPage('shop')">
+            <span class="material-icons-round">storefront</span> Continue Shopping
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ WISHLIST PAGE ══ -->
+    <section id="wishlistPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">favorite</span> Wishlist
+      </h2>
+      <div id="wishlistGrid" class="product-grid"></div>
+    </section>
+
+    <!-- ══ ORDERS PAGE ══ -->
+    <section id="ordersPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">receipt_long</span> My Orders
+      </h2>
+      <div class="order-tabs">
+        <button class="order-tab active" onclick="filterOrders('all')">All</button>
+        <button class="order-tab" onclick="filterOrders('pending')">Pending</button>
+        <button class="order-tab" onclick="filterOrders('shipped')">Shipped</button>
+        <button class="order-tab" onclick="filterOrders('delivered')">Delivered</button>
+      </div>
+      <div id="ordersList" class="orders-list"></div>
+    </section>
+
+    <!-- ══ WALLET PAGE ══ -->
+    <section id="walletPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">account_balance_wallet</span> Wallet
+      </h2>
+
+      <div class="wallet-card">
+        <div class="wallet-top">
+          <span class="wallet-label">Available Balance</span>
+          <span class="wallet-balance" id="walletBalance">₨ 0.00</span>
+        </div>
+        <div class="wallet-bottom">
+          <div class="wallet-stat">
+            <span class="material-icons-round">arrow_downward</span>
+            <div><strong id="walletEarned">₨ 0</strong><small>Total Earned</small></div>
+          </div>
+          <div class="wallet-stat">
+            <span class="material-icons-round">arrow_upward</span>
+            <div><strong id="walletSpent">₨ 0</strong><small>Total Spent</small></div>
+          </div>
+        </div>
+        <button class="btn-outline full-width" onclick="requestWithdrawal()">
+          <span class="material-icons-round">savings</span> Withdraw
+        </button>
+      </div>
+
+      <h3 class="sub-title">Transaction History</h3>
+      <div id="transactionsList" class="transactions-list"></div>
+    </section>
+
+    <!-- ══ REFERRAL PAGE ══ -->
+    <section id="referralPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">people</span> Referral Program
+      </h2>
+      <!-- Activation Status Banner -->
+  <div id="activationBanner" style="display:none;margin-bottom:20px"></div>
+
+      <!-- How it Works -->
+      <div class="how-it-works">
+        <div class="step-card">
+          <span class="step-num">1</span>
+          <span class="material-icons-round">share</span>
+          <h4>Share Code</h4>
+          <p>Share your unique referral code with friends and family.</p>
+        </div>
+        <div class="step-divider"><span class="material-icons-round">arrow_forward</span></div>
+        <div class="step-card">
+          <span class="step-num">2</span>
+          <span class="material-icons-round">person_add</span>
+          <h4>They Buy</h4>
+          <p>Your friend buys any product using your referral code.</p>
+        </div>
+        <div class="step-divider"><span class="material-icons-round">arrow_forward</span></div>
+        <div class="step-card">
+          <span class="step-num">3</span>
+          <span class="material-icons-round">paid</span>
+          <h4>You Earn</h4>
+          <p>You automatically earn commission on every purchase made through your code.</p>
+        </div>
+      </div>
+
+      <!-- Commission Tiers -->
+      <div class="commission-tiers">
+        <div class="tier-card tier-l1">
+          <span class="material-icons-round">looks_one</span>
+          <h4>Level 1</h4>
+          <div class="tier-pct">10%</div>
+          <p>Direct referrals</p>
+        </div>
+        <div class="tier-card tier-l2">
+          <span class="material-icons-round">looks_two</span>
+          <h4>Level 2</h4>
+          <div class="tier-pct">5%</div>
+          <p>Your referral's referrals</p>
+        </div>
+      </div>
+
+      <!-- Invite Code Box -->
+      <div class="invite-box">
+        <h3>Your Invite Code</h3>
+        <div class="invite-code-display">
+          <span id="inviteCode">Loading…</span>
+          <button class="icon-btn" onclick="copyInviteCode()" title="Copy">
+            <span class="material-icons-round">content_copy</span>
+          </button>
+        </div>
+        <div class="invite-actions">
+          <button class="btn-primary" onclick="shareInvite()">
+            <span class="material-icons-round">share</span> Share Link
+          </button>
+          <button class="btn-outline" onclick="copyInviteCode()">
+            <span class="material-icons-round">content_copy</span> Copy Code
+          </button>
+        </div>
+      </div>
+
+      <!-- Referral Tree -->
+      <h3 class="sub-title">Your Network</h3>
+      <div id="referralTree" class="referral-tree"></div>
+    </section>
+
+    <!-- ══ PROFILE PAGE ══ -->
+    <section id="profilePage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">manage_accounts</span> My Profile
+      </h2>
+
+      <div class="profile-hero">
+        <div class="profile-avatar-wrap">
+          <img id="profileAvatar" src="https://ui-avatars.com/api/?name=U&background=6366f1&color=fff&size=100" alt="Avatar" />
+          <button class="avatar-edit-btn" onclick="changeAvatar()">
+            <span class="material-icons-round">photo_camera</span>
+          </button>
+        </div>
+        <div class="profile-info">
+          <h3 id="profileName">Loading…</h3>
+          <p id="profileEmail" class="muted"></p>
+          <span class="profile-badge" id="profileBadge">Starter</span>
+        </div>
+      </div>
+
+      <div class="profile-cards">
+        <div class="profile-card" onclick="showPage('orders')">
+          <span class="material-icons-round">receipt_long</span>
+          <div><strong id="pcOrders">0</strong><span>Orders</span></div>
+        </div>
+        <div class="profile-card" onclick="showPage('wallet')">
+          <span class="material-icons-round">account_balance_wallet</span>
+          <div><strong id="pcWallet">₨ 0</strong><span>Wallet</span></div>
+        </div>
+        <div class="profile-card" onclick="showPage('referral')">
+          <span class="material-icons-round">people</span>
+          <div><strong id="pcReferrals">0</strong><span>Referrals</span></div>
+        </div>
+        <div class="profile-card" onclick="showPage('wishlist')">
+          <span class="material-icons-round">favorite</span>
+          <div><strong id="pcWishlist">0</strong><span>Wishlist</span></div>
+        </div>
+      </div>
+
+      <div class="profile-menu">
+        <a class="profile-menu-item" onclick="showPage('editProfile')">
+          <span class="material-icons-round">edit</span> Edit Profile
+          <span class="material-icons-round chevron">chevron_right</span>
+        </a>
+        <a class="profile-menu-item" onclick="showPage('addresses')">
+          <span class="material-icons-round">location_on</span> Saved Addresses
+          <span class="material-icons-round chevron">chevron_right</span>
+        </a>
+        <a class="profile-menu-item" onclick="showPage('notifications')">
+          <span class="material-icons-round">notifications</span> Notifications
+          <span class="material-icons-round chevron">chevron_right</span>
+        </a>
+        <a class="profile-menu-item" onclick="showPage('referral')">
+          <span class="material-icons-round">card_giftcard</span> Referral Program
+          <span class="material-icons-round chevron">chevron_right</span>
+        </a>
+        <a class="profile-menu-item danger" onclick="logoutUser()">
+          <span class="material-icons-round">logout</span> Logout
+          <span class="material-icons-round chevron">chevron_right</span>
+        </a>
+      </div>
+    </section>
+    <!-- ══ EDIT PROFILE PAGE ══ -->
+    <section id="editProfilePage" class="tab-panel">
+    </section>
+
+    <!-- ══ NOTIFICATIONS PAGE ══ -->
+    <section id="notificationsPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">notifications</span> Notifications
+      </h2>
+      <div id="notificationsList" class="notifications-list"></div>
+    </section>
+
+<!-- ══ CATEGORIES PAGE ══ -->
+<section id="categoriesPage" class="tab-panel">
+  <div class="section-header" style="margin-bottom:20px">
+    <h2 class="section-title">
+      <span class="material-icons-round">category</span> All Categories
+    </h2>
+    <span id="catTotalCount" class="muted"></span>
+  </div>
+  <div id="categoriesGrid"></div>
+</section>
+
+    <!-- ══ SEARCH RESULTS PAGE ══ -->
+    <section id="searchPage" class="tab-panel">
+      <div class="section-header">
+        <h2 class="section-title">Search Results</h2>
+        <span id="searchResultCount" class="muted"></span>
+      </div>
+      <div id="searchResultsGrid" class="product-grid"></div>
+    </section>
+
+    <!-- ══ CHECKOUT PAGE ══ -->
+    <section id="checkoutPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">payment</span> Checkout
+      </h2>
+      <div class="checkout-layout">
+        <div class="checkout-left">
+          <div class="checkout-section">
+  <h3><span class="material-icons-round">card_giftcard</span> Referral Code</h3>
+  <p style="font-size:13px;color:var(--text-secondary);margin-bottom:4px">
+    Have a referral code? Enter it to support your inviter.
+  </p>
+  <div style="display:flex;gap:10px;align-items:center">
+    <div class="input-group" style="flex:1">
+      <span class="material-icons-round">card_giftcard</span>
+      <input type="text" id="checkoutReferral" placeholder="Enter referral code (optional)"
+        style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" />
+    </div>
+    <button class="btn-outline" onclick="validateCheckoutReferral()" style="white-space:nowrap;padding:13px 16px">
+      Apply
+    </button>
+  </div>
+  <div id="referralApplyStatus" style="display:none;margin-top:8px;font-size:13px;font-weight:600"></div>
+</div>
+          <div class="checkout-section">
+            <h3><span class="material-icons-round">location_on</span> Delivery Address</h3>
+            <div class="input-group">
+              <span class="material-icons-round">person</span>
+              <input type="text" id="coName" placeholder="Full Name" />
+            </div>
+            <div class="input-group">
+              <span class="material-icons-round">phone</span>
+              <input type="tel" id="coPhone" placeholder="Phone Number" />
+            </div>
+            <div class="input-group">
+              <span class="material-icons-round">home</span>
+              <input type="text" id="coAddress" placeholder="Street Address" />
+            </div>
+            <div class="input-row">
+              <div class="input-group">
+                <span class="material-icons-round">location_city</span>
+                <input type="text" id="coCity" placeholder="City" />
+              </div>
+              <div class="input-group">
+                <span class="material-icons-round">map</span>
+                <input type="text" id="coPostal" placeholder="Postal Code" />
+              </div>
+            </div>
+          </div>
+
+          <div class="checkout-section">
+            <h3><span class="material-icons-round">payment</span> Payment Method</h3>
+            <div class="payment-options">
+  <label class="payment-option">
+    <input type="radio" name="payMethod" value="cod" checked onchange="switchPayment(this.value)" />
+    <span class="material-icons-round">local_shipping</span> Cash on Delivery
+  </label>
+  <label class="payment-option">
+    <input type="radio" name="payMethod" value="jazzcash" onchange="switchPayment(this.value)" />
+    <span class="material-icons-round">phone_android</span> JazzCash
+  </label>
+  <label class="payment-option">
+    <input type="radio" name="payMethod" value="easypaisa" onchange="switchPayment(this.value)" />
+    <span class="material-icons-round">account_balance</span> EasyPaisa
+  </label>
+  <label class="payment-option">
+    <input type="radio" name="payMethod" value="bank" onchange="switchPayment(this.value)" />
+    <span class="material-icons-round">credit_card</span> Bank Transfer
+  </label>
+  <label class="payment-option">
+    <input type="radio" name="payMethod" value="wallet" onchange="switchPayment(this.value)" />
+    <span class="material-icons-round">account_balance_wallet</span> Wallet Balance
+  </label>
+</div>
+
+<!-- Payment details box — shows instructions per method -->
+<div id="paymentDetails" class="stripe-box" style="display:none"></div>
+          </div>
+        </div>
+
+        <div class="checkout-right">
+          <h3>Order Summary</h3>
+          <div id="checkoutItems" class="checkout-items"></div>
+          <div class="summary-row"><span>Subtotal</span><span id="coSubtotal">₨ 0</span></div>
+          <div class="summary-row"><span>Shipping</span><span id="coShipping">₨ 0</span></div>
+          <div class="summary-row total"><span>Total</span><span id="coTotal">₨ 0</span></div>
+          <button class="btn-primary full-width" onclick="placeOrder()">
+            <span class="material-icons-round">check_circle</span> Place Order
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main><!-- /page-container -->
+
+</div><!-- /appShell -->
+
+<!-- ======================================================
+     LOADING SPINNER
+====================================================== -->
+<div id="loadingSpinner" class="spinner-overlay active">
+  <div class="spinner-wrap">
+    <svg class="spinner-ring" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="44" fill="none" stroke="url(#spinGrad)" stroke-width="4" stroke-linecap="round" stroke-dasharray="160 120"/>
+      <defs>
+        <linearGradient id="spinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#6366f1"/>
+          <stop offset="100%" stop-color="#ec4899"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <div class="spinner-logo">
+      <img src="https://img.icons8.com/fluency/48/shopping-bag.png" alt="Logo" />
+    </div>
+  </div>
+  <p class="spinner-text">ShopEarn</p>
+</div>
+<!-- ORDER TRACKING OVERLAY -->
+<div id="orderTrackingOverlay" class="overlay" style="align-items:flex-end;padding:0">
+  <div style="background:var(--surface);width:100%;max-width:600px;margin:0 auto;border-radius:22px 22px 0 0;padding:24px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <h3 style="font-size:17px;font-weight:800">Track Order</h3>
+      <button class="icon-btn" onclick="closeOrderTracking()">
+        <span class="material-icons-round">close</span>
+      </button>
+    </div>
+    <div id="orderTrackingContent"></div>
+  </div>
+</div>
+
+<!-- ─── App JS ─── -->
+<script src="app.js"></script>
+
+</body>
+</html>
+```
