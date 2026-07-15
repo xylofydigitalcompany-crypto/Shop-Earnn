@@ -47,18 +47,120 @@ let cart = [];                // [{ productId, qty }]
 let categories = [];
 let activeFilterCategory = null;
 let countdownInterval = null;
+let helpChatUnsub = null;
 
 const SHIPPING_FLAT_FEE = 250; // ₨ flat shipping, adjust as needed
 const ACTIVATION_FEE = 100; // ₨ monthly activation fee
+
+const CLOUDINARY_CLOUD_NAME = "v00co0w5";
+const CLOUDINARY_UPLOAD_PRESET = "Shop Earn";
+
+async function uploadToCloudinary(file) {
+  const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+  const response = await fetch(url, { method: "POST", body: formData });
+  if (!response.ok) throw new Error("Image upload failed.");
+  const data = await response.json();
+  return data.secure_url;
+}
+
+let reviewModalRating = 0;
+let reviewModalPhotos = [];
+let reviewModalContext = null;
+
+// Fixed commission split of every product's price — same for all products
+const L1_COMMISSION_PCT = 10;
+const L2_COMMISSION_PCT = 5;
+
+// Commission split of the ₨100 referral-code ACTIVATION fee (separate pool from product commissions)
+const ACTIVATION_L1_PCT = 15; // direct inviter
+const ACTIVATION_L2_PCT = 10; // inviter's inviter
+
+// Store theme presets — mirrors the seller dashboard's STORE_THEMES so a
+// shopper sees the same look the seller picked in "Store Decor".
+const STORE_THEMES = {
+  classic: { header: "linear-gradient(135deg,#1F3A2E,#2B4E3D)", text: "#EFE8D8" },
+  vibrant: { header: "linear-gradient(135deg,#FF6B35,#EC4899,#7C3AED)", text: "#FFFFFF" },
+  mono:    { header: "#111111", text: "#FFFFFF" },
+};
+
+// Caches seller shop info (name, verified status, decor) so we don't
+// re-fetch it every time the same shop is referenced on the page.
+let sellerProfileCache = {};
+
+async function getSellerProfile(sellerUid) {
+  if (!sellerUid) return null;
+  if (sellerProfileCache[sellerUid]) return sellerProfileCache[sellerUid];
+  try {
+    const doc = await db.collection("users").doc(sellerUid).get();
+    if (!doc.exists) return null;
+    const data = doc.data();
+    const profile = {
+      uid: sellerUid,
+      shopName: (data.sellerProfile && data.sellerProfile.shopName) || data.email || "Shop",
+      verified: !!(data.sellerProfile && data.sellerProfile.verified),
+      storeSettings: Object.assign(
+        { theme: "classic", design: null, logoUrl: "", coverUrl: "", banners: [], featuredProductIds: [] },
+        data.storeSettings || {}
+      ),
+    };
+    sellerProfileCache[sellerUid] = profile;
+    return profile;
+  } catch (err) {
+    console.error("getSellerProfile error:", err);
+    return null;
+  }
+}
 
 /* ---------------------------------------------------------------------
    INIT
 --------------------------------------------------------------------- */
 document.addEventListener("DOMContentLoaded", () => {
-
+  const previewSellerUid = new URLSearchParams(window.location.search).get("previewStore");
+  if (previewSellerUid) {
+    initPublicStorePreview(previewSellerUid);
+    return;
+  }
   setupAuthListener();
   startFlashSaleCountdown();
+  initReviewStarPicker();
 });
+
+/**
+ * Public, no-login store preview — Seller Dashboard ke "Store Preview"
+ * tab se iframe ke zariye load hota hai: index.html?previewStore=UID
+ * Yeh wahi viewSellerStore() render karta hai jo asli buyer dekhta hai.
+ */
+async function initPublicStorePreview(sellerUid) {
+  document.getElementById("authOverlay").classList.remove("active");
+  document.getElementById("appShell").classList.remove("hidden");
+  document.body.classList.add("preview-mode");
+  showSpinner(true);
+  try {
+    // Use a completely SEPARATE, isolated Firebase app for the preview
+    // iframe. The default app's auth session is shared storage (same
+    // origin + same Firebase project). Signing in anonymously on the
+    // default app — even with persistence "NONE" — can still clobber
+    // the seller's real session in the parent tab. A secondary named
+    // app has its own isolated auth storage key, so it can never touch
+    // the seller's logged-in session.
+    const previewApp = firebase.initializeApp(firebaseConfig, "previewApp-" + Date.now());
+    auth = previewApp.auth();
+    db = previewApp.firestore();
+
+    await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+    await auth.signInAnonymously();
+    await loadProducts();
+    await viewSellerStore(sellerUid);
+  } catch (err) {
+    console.error("preview mode error:", err);
+    showToast("Couldn't load store preview: " + err.message, "error");
+  } finally {
+    showSpinner(false);
+  }
+}
 
 
 
@@ -160,10 +262,11 @@ async function registerUser() {
   const name = document.getElementById("regName").value.trim();
   const email = document.getElementById("regEmail").value.trim();
   const password = document.getElementById("regPassword").value;
-  const referralCodeUsed = null;
+  const referralCodeUsed = document.getElementById("regReferral").value.trim().toUpperCase();
 
   if (!name || !email || !password) return showToast("Please fill in all required fields", "error");
   if (password.length < 6) return showToast("Password must be at least 6 characters", "error");
+  if (!referralCodeUsed) return showToast("A referral code is required to register", "error");
 
   showSpinner(true);
   try {
@@ -234,7 +337,7 @@ async function createUserProfile(uid, { name, email, photoURL, referralCodeUsed,
   await db.collection("invites").doc(myInviteCode).set({ uid });
 
   if (inviterUid) {
-    await notifyUser(inviterUid, "New referral!", `${name} just joined using your invite code.`);
+  await notifyUser(inviterUid, "New referral!", `${name} just joined using your invite code.`, { type: "new_referral" });
   }
 }
 
@@ -246,6 +349,7 @@ function generateInviteCode() {
 }
 
 async function logoutUser() {
+  if (helpChatUnsub) { helpChatUnsub(); helpChatUnsub = null; }
   await auth.signOut();
   showToast("Logged out", "success");
   document.getElementById("sidebar").classList.remove("open");
@@ -275,13 +379,15 @@ async function refreshUserData() {
    and they earn ZERO commission from their downline until they buy
    something again themselves.
 ===================================================================== */
-function currentMonthKey() {
+function getExpiryDate() {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  d.setDate(d.getDate() + 30);
+  return d.toISOString();
 }
 
 function isUserActiveThisMonth(userDoc) {
-  return userDoc && userDoc.activeMonthKey === currentMonthKey();
+  if (!userDoc || !userDoc.codeExpiresAt) return false;
+  return new Date(userDoc.codeExpiresAt) > new Date();
 }
 
 /**
@@ -292,9 +398,8 @@ function isUserActiveThisMonth(userDoc) {
  */
 async function checkAndExpireInactiveCodes() {
   if (!userData) return;
-  // Only show warning if user has been active before but not this month
-  if (userData.activeMonthKey && !isUserActiveThisMonth(userData)) {
-    showToast("Your referral code is inactive this month. Buy something to start earning again!", "error");
+  if (userData.codeExpiresAt && !isUserActiveThisMonth(userData)) {
+    showToast("Your referral code has expired. Activate it again to start earning!", "error");
   }
 }
 
@@ -303,7 +408,7 @@ async function checkAndExpireInactiveCodes() {
  * complete a purchase (as buyer).
  */
 async function markUserActiveThisMonth(uid) {
-  await db.collection("users").doc(uid).update({ activeMonthKey: currentMonthKey() });
+  await db.collection("users").doc(uid).update({ codeExpiresAt: getExpiryDate() });
 }
 
 /* =====================================================================
@@ -323,6 +428,12 @@ async function loadCategories() {
 function renderCategoriesScroll() {
   const el = document.getElementById("categoriesScroll");
   if (!el) return;
+
+  if (!categories.length) {
+    el.innerHTML = `<p style="color:var(--text-muted);font-size:13px;padding:8px 0">No categories yet. Add a category when creating a product.</p>`;
+    return;
+  }
+
   el.innerHTML = categories
     .map(
       (c) => `
@@ -376,9 +487,7 @@ function productCardHTML(p) {
   const inWishlist = userData?.wishlist?.includes(p.id);
   const badge = p.isFlashSale
     ? `<span class="commission-tag" style="background:#ef4444">${p.discountPct}% OFF</span>`
-    : p.l1SharePct
-    ? `<span class="commission-tag">Earn ${p.l1SharePct}%</span>`
-    : "";
+    : `<span class="commission-tag">Earn ${L1_COMMISSION_PCT}%</span>`;
 
   const priceHTML = p.isFlashSale && p.originalPrice
     ? `<p class="product-price">₨ ${formatMoney(p.price)} <del style="font-size:11px;color:#94a3b8;font-weight:400">₨ ${formatMoney(p.originalPrice)}</del></p>`
@@ -387,7 +496,7 @@ function productCardHTML(p) {
   return `
     <div class="product-card">
       <div class="product-img-wrap" onclick="openProduct('${p.id}')">
-        <img src="${p.image || placeholderImg()}" alt="${escapeHtml(p.name)}" loading="lazy" />
+        <img src="${p.imageUrl || placeholderImg()}" alt="${escapeHtml(p.name)}" loading="lazy" />
         ${badge}
       </div>
       <button class="wishlist-btn ${inWishlist ? "active" : ""}" onclick="toggleWishlist('${p.id}')">
@@ -429,6 +538,53 @@ function renderShopProducts() {
     ? filteredProducts.map(productCardHTML).join("")
     : emptyState("search_off", "No products found", "Try adjusting your filters.");
   renderFilterChips();
+  renderShopCategoriesScroll();
+  renderActiveCategoryBadge();
+}
+
+function renderShopCategoriesScroll() {
+  const el = document.getElementById("shopCategoriesScroll");
+  if (!el) return;
+  el.innerHTML = categories
+    .map(
+      (c) => `
+      <div class="category-chip ${activeFilterCategory === c ? "active" : ""}" onclick="selectShopCategory('${escapeHtml(c)}')">
+        <span class="material-icons-round">category</span>
+        <span>${escapeHtml(c)}</span>
+      </div>`
+    )
+    .join("");
+}
+
+function selectShopCategory(cat) {
+  activeFilterCategory = activeFilterCategory === cat ? null : cat;
+  filteredProducts = activeFilterCategory
+    ? allProducts.filter((p) => p.category === activeFilterCategory)
+    : [...allProducts];
+  renderShopProducts();
+}
+
+function renderActiveCategoryBadge() {
+  const el = document.getElementById("activeCategoryBadge");
+  if (!el) return;
+  if (activeFilterCategory) {
+    el.style.display = "flex";
+    el.innerHTML = `
+      <span class="material-icons-round">category</span>
+      <span>Category: <strong>${escapeHtml(activeFilterCategory)}</strong></span>
+      <button onclick="removeActiveCategory()" title="Remove filter">
+        <span class="material-icons-round">close</span>
+      </button>`;
+  } else {
+    el.style.display = "none";
+    el.innerHTML = "";
+  }
+}
+
+function removeActiveCategory() {
+  activeFilterCategory = null;
+  filteredProducts = [...allProducts];
+  renderShopProducts();
 }
 
 function renderFilterChips() {
@@ -519,30 +675,44 @@ function clearSearch() {
 /* =====================================================================
    PRODUCT DETAIL
 ===================================================================== */
-function openProduct(id) {
+async function openProduct(id) {
   const p = allProducts.find((x) => x.id === id);
   if (!p) return;
   const inWishlist = userData?.wishlist?.includes(p.id);
+
+  let sellerProfile = null;
+  if (p.sellerUid) {
+    sellerProfile = await getSellerProfile(p.sellerUid);
+  }
+
+  const sellerHTML = sellerProfile
+    ? `
+        <button class="visit-store-link" onclick="viewSellerStore('${p.sellerUid}')">
+          <span class="material-icons-round">storefront</span>
+          <span>Sold by <strong>${escapeHtml(sellerProfile.shopName)}</strong></span>
+          ${sellerProfile.verified ? '<span class="material-icons-round store-verified-icon" title="Verified Seller">verified</span>' : ""}
+          <span class="material-icons-round chevron">chevron_right</span>
+        </button>`
+    : "";
+
   document.getElementById("productDetail").innerHTML = `
     <div class="product-detail-grid">
       <div class="product-detail-img">
-        <img src="${p.image || placeholderImg()}" alt="${escapeHtml(p.name)}" />
+        <img src="${p.imageUrl || placeholderImg()}" alt="${escapeHtml(p.name)}" />
       </div>
       <div class="product-detail-info">
         <span class="product-detail-cat">${escapeHtml(p.category || "")}</span>
         <h1>${escapeHtml(p.name)}</h1>
         <p class="product-detail-price">₨ ${formatMoney(p.price)}</p>
-        ${
-          p.l1SharePct
-            ? `<div class="commission-box">
-                <span class="material-icons-round">paid</span>
-                <div>
-                  <strong>Referral earnings on this item</strong>
-                  <p>Level 1 inviter earns ${p.l1SharePct}% · Level 2 inviter earns ${p.l2SharePct || 0}%</p>
-                </div>
-              </div>`
-            : ""
-        }
+        <div id="productRatingSummary" class="product-rating-summary"></div>
+        ${sellerHTML}
+        <div class="commission-box">
+          <span class="material-icons-round">paid</span>
+          <div>
+            <strong>Referral earnings on this item</strong>
+            <p>Level 1 inviter earns ${L1_COMMISSION_PCT}% · Level 2 inviter earns ${L2_COMMISSION_PCT}%</p>
+          </div>
+        </div>
         <p class="product-detail-desc">${escapeHtml(p.description || "No description available.")}</p>
         <p class="stock-info ${p.stock > 0 ? "in-stock" : "out-stock"}">
           ${p.stock > 0 ? `${p.stock} in stock` : "Out of stock"}
@@ -556,8 +726,159 @@ function openProduct(id) {
           </button>
         </div>
       </div>
-    </div>`;
+    </div>
+    <div id="productReviewsSection"></div>
+    <div id="productQnaSection"></div>
+    <div id="moreFromStoreSection"></div>`;
   showPage("product");
+
+  await loadProductReviewsAndQna(p.id, p.sellerUid);
+
+  if (p.sellerUid) {
+    renderMoreFromStore(p.sellerUid, p.id);
+  }
+}
+
+async function renderMoreFromStore(sellerUid, excludeProductId) {
+  const container = document.getElementById("moreFromStoreSection");
+  if (!container) return;
+
+  const items = allProducts.filter((prod) => prod.sellerUid === sellerUid && prod.id !== excludeProductId);
+  if (!items.length) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const sellerProfile = await getSellerProfile(sellerUid);
+  const shopName = sellerProfile ? sellerProfile.shopName : "this shop";
+
+  container.innerHTML = `
+    <div class="section-header" style="margin-top:28px">
+      <h2 class="section-title">
+        <span class="material-icons-round">storefront</span> More from ${escapeHtml(shopName)}
+      </h2>
+      <a class="see-all" onclick="viewSellerStore('${sellerUid}')">Visit store</a>
+    </div>
+    <div class="product-grid">${items.slice(0, 8).map(productCardHTML).join("")}</div>`;
+}
+
+/* =====================================================================
+   SELLER STORE PAGE (Daraz-style shop view)
+===================================================================== */
+async function viewSellerStore(sellerUid) {
+  showSpinner(true);
+  try {
+    const sellerProfile = await getSellerProfile(sellerUid);
+    if (!sellerProfile) {
+      showToast("This store isn't available right now", "error");
+      return;
+    }
+
+    const storeProducts = allProducts.filter((p) => p.sellerUid === sellerUid);
+
+    let sellerReviews = [];
+    try {
+      const sellerReviewsSnap = await db.collection("reviews").where("sellerUid", "==", sellerUid).get();
+      sellerReviews = sellerReviewsSnap.docs.map((d) => d.data());
+    } catch (reviewErr) {
+      console.error("seller reviews fetch error:", reviewErr);
+    }
+    const sellerAvgRating = sellerReviews.length
+      ? sellerReviews.reduce((s, r) => s + (Number(r.rating) || 0), 0) / sellerReviews.length
+      : 0;
+    const settings = sellerProfile.storeSettings;
+
+    const featuredProducts = (settings.featuredProductIds || [])
+      .filter(Boolean)
+      .map((id) => storeProducts.find((p) => p.id === id))
+      .filter(Boolean)
+      .slice(0, 5);
+
+    const storeCategories = [...new Set(storeProducts.map((p) => p.category).filter(Boolean))];
+
+    const theme = STORE_THEMES[settings.theme] || STORE_THEMES.classic;
+
+    const coverHTML = settings.coverUrl
+      ? `<img src="${escapeHtml(settings.coverUrl)}" class="store-cover-img" alt="${escapeHtml(sellerProfile.shopName)} banner" />`
+      : `<div class="store-cover-placeholder" style="background:${theme.header}"><span class="material-icons-round" style="color:${theme.text}">storefront</span></div>`;
+
+    const logoHTML = settings.logoUrl
+      ? `<img src="${escapeHtml(settings.logoUrl)}" class="store-logo-img" alt="${escapeHtml(sellerProfile.shopName)} logo" />`
+      : `<span class="material-icons-round store-logo-fallback">storefront</span>`;
+
+    const verifiedHTML = sellerProfile.verified
+      ? '<span class="store-verified-chip"><span class="material-icons-round">verified</span> Verified Seller</span>'
+      : "";
+
+    const ratingHTML = sellerReviews.length
+      ? `<span class="store-rating-chip">${starsHTML(sellerAvgRating, 13)} <strong>${sellerAvgRating.toFixed(1)}</strong> (${sellerReviews.length})</span>`
+      : `<span class="store-rating-chip store-rating-chip--none">No ratings yet</span>`;
+
+    const categoryChipsHTML = storeCategories.length
+      ? `<div class="store-cat-chips">${storeCategories.map((c) => `<span class="store-cat-chip">${escapeHtml(c)}</span>`).join("")}</div>`
+      : "";
+
+    const featuredHTML = featuredProducts.length
+      ? `
+        <div class="store-section">
+          <div class="section-header">
+            <h2 class="section-title"><span class="material-icons-round">star</span> Featured Products</h2>
+          </div>
+          <div class="product-grid">${featuredProducts.map(productCardHTML).join("")}</div>
+        </div>`
+      : "";
+
+    const banners = settings.banners || [];
+    const bannersHTML = banners.length
+      ? `
+        <div class="store-promo-band">
+          <div class="store-promo-scroll">
+            ${banners.map((url) => `<div class="store-promo-slide"><img src="${escapeHtml(url)}" alt="Promotion" /></div>`).join("")}
+          </div>
+        </div>`
+      : "";
+
+    const productsHTML = storeProducts.length
+      ? `<div class="product-grid">${storeProducts.map(productCardHTML).join("")}</div>`
+      : emptyState("storefront", "No products yet", "This shop hasn't listed any products.");
+
+    const themeAccent = (theme.header.match(/#[0-9a-fA-F]{3,6}/) || ["#6366f1"])[0];
+
+    document.getElementById("storeContent").innerHTML = `
+      <div class="store-cover-wrap">
+        ${coverHTML}
+      </div>
+
+      <div class="store-info-card" style="border-top:4px solid ${themeAccent}">
+        <div class="store-logo-box">${logoHTML}</div>
+        <div class="store-header-text">
+          <h2>${escapeHtml(sellerProfile.shopName)}</h2>
+          <div class="store-meta-row">
+            ${verifiedHTML}
+            ${ratingHTML}
+            <span class="store-meta-item"><span class="material-icons-round">inventory_2</span> ${storeProducts.length} Products</span>
+          </div>
+          ${categoryChipsHTML}
+        </div>
+      </div>
+
+      ${featuredHTML}
+      ${bannersHTML}
+
+      <div class="store-section">
+        <div class="section-header">
+          <h2 class="section-title">All Products</h2>
+          <span class="muted">${storeProducts.length} item${storeProducts.length !== 1 ? "s" : ""}</span>
+        </div>
+        ${productsHTML}
+      </div>`;
+
+    showPage("store");
+  } catch (err) {
+    showToast("Error loading store: " + err.message, "error");
+  } finally {
+    showSpinner(false);
+  }
 }
 
 /* =====================================================================
@@ -626,7 +947,7 @@ function renderCart() {
         .map(
           (item) => `
       <div class="cart-item">
-        <img src="${item.image || placeholderImg()}" alt="${escapeHtml(item.name)}" />
+        <img src="${item.imageUrl || placeholderImg()}" alt="${escapeHtml(item.name)}" />
         <div class="cart-item-info">
           <h4>${escapeHtml(item.name)}</h4>
           <p>₨ ${formatMoney(item.price)}</p>
@@ -701,6 +1022,7 @@ async function toggleWishlist(productId) {
 
 function loadWishlistBadge() {
   const badge = document.getElementById("wishlistBadge");
+  if (!badge) return;
   const count = userData?.wishlist?.length || 0;
   badge.textContent = count;
   badge.style.display = count > 0 ? "inline-flex" : "none";
@@ -988,18 +1310,14 @@ const l2Active = l2Doc && l2Doc.exists && isUserActiveThisMonth(l2Doc.data());
 
     for (const item of items) {
       const lineTotal = item.price * item.qty;
-      const l1Pct = item.l1SharePct || 0;
-      const l2Pct = item.l2SharePct || 0;
 
-      
-
-      if (l1Uid && l1Active && l1Pct > 0) {
-        const amount = round2((lineTotal * l1Pct) / 100);
+      if (l1Uid && l1Active) {
+        const amount = round2((lineTotal * L1_COMMISSION_PCT) / 100);
         l1TotalCredit += amount;
         commissionsPaid.push({ uid: l1Uid, level: 1, amount, productId: item.id });
       }
-      if (l2Uid && l2Active && l2Pct > 0) {
-        const amount = round2((lineTotal * l2Pct) / 100);
+      if (l2Uid && l2Active) {
+        const amount = round2((lineTotal * L2_COMMISSION_PCT) / 100);
         l2TotalCredit += amount;
         commissionsPaid.push({ uid: l2Uid, level: 2, amount, productId: item.id });
       }
@@ -1009,7 +1327,8 @@ const l2Active = l2Doc && l2Doc.exists && isUserActiveThisMonth(l2Doc.data());
     const orderRef = db.collection("orders").doc();
     await orderRef.set({
       buyerUid: currentUser.uid,
-      items: items.map((i) => ({ productId: i.id, name: i.name, price: i.price, qty: i.qty })),
+      items: items.map((i) => ({ productId: i.id, name: i.name, price: i.price, qty: i.qty, sellerUid: i.sellerUid || null, imageUrl: i.imageUrl || "" })),
+sellerUids: [...new Set(items.map((i) => i.sellerUid).filter(Boolean))],
       subtotal,
       shipping,
       total,
@@ -1021,6 +1340,12 @@ const l2Active = l2Doc && l2Doc.exists && isUserActiveThisMonth(l2Doc.data());
       commissionsPaid,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     });
+
+    // ---- 3b. Notify each seller of the new order ----
+    const distinctSellerUids = [...new Set(items.map((i) => i.sellerUid).filter(Boolean))];
+    for (const sUid of distinctSellerUids) {
+      await notifyUser(sUid, "New order received! 🛍️", `You have a new order (#${orderRef.id.slice(0, 8).toUpperCase()}) waiting for confirmation.`, { type: "new_order", orderId: orderRef.id });
+    }
 
     // ---- 4. Settle buyer's wallet if they paid by wallet ----
     if (paymentMethod === "wallet") {
@@ -1047,7 +1372,7 @@ const l2Active = l2Doc && l2Doc.exists && isUserActiveThisMonth(l2Doc.data());
           totalEarned: firebase.firestore.FieldValue.increment(l1TotalCredit),
         });
         await logTransaction(l1Uid, "credit", l1TotalCredit, `Level 1 commission from order`, orderRef.id);
-        await notifyUser(l1Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l1TotalCredit)} from a referral purchase.`);
+        await notifyUser(l1Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l1TotalCredit)} from a referral purchase.`, { type: "commission_earned" });
       }
       if (l2Uid && l2TotalCredit > 0) {
         await db.collection("users").doc(l2Uid).update({
@@ -1055,15 +1380,15 @@ const l2Active = l2Doc && l2Doc.exists && isUserActiveThisMonth(l2Doc.data());
           totalEarned: firebase.firestore.FieldValue.increment(l2TotalCredit),
         });
         await logTransaction(l2Uid, "credit", l2TotalCredit, `Level 2 commission from order`, orderRef.id);
-        await notifyUser(l2Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l2TotalCredit)} from your network's purchase.`);
+        await notifyUser(l2Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l2TotalCredit)} from your network's purchase.`, { type: "commission_earned" });
       }
     } else {
       // For JazzCash, EasyPaisa, Bank — notify inviters to wait for admin verification
       if (l1Uid && l1TotalCredit > 0) {
-        await notifyUser(l1Uid, "Commission Pending!", `₨ ${formatMoney(l1TotalCredit)} commission is pending payment verification.`);
+        await notifyUser(l1Uid, "Commission Pending!", `₨ ${formatMoney(l1TotalCredit)} commission is pending payment verification.`, { type: "commission_earned" });
       }
       if (l2Uid && l2TotalCredit > 0) {
-        await notifyUser(l2Uid, "Commission Pending!", `₨ ${formatMoney(l2TotalCredit)} commission is pending payment verification.`);
+        await notifyUser(l2Uid, "Commission Pending!", `₨ ${formatMoney(l2TotalCredit)} commission is pending payment verification.`, { type: "commission_earned" });
       }
     }
     
@@ -1209,7 +1534,12 @@ async function cancelOrder(orderId) {
       });
     }
 
-    await notifyUser(currentUser.uid, "Order Cancelled", `Your order #${orderId.slice(0,8).toUpperCase()} has been cancelled.`);
+    const cancelledSellerUids = [...new Set((order.items || []).map((i) => i.sellerUid).filter(Boolean))];
+    for (const sUid of cancelledSellerUids) {
+      await notifyUser(sUid, "Order Cancelled by Buyer", `Order #${orderId.slice(0,8).toUpperCase()} was cancelled by the buyer.`, { type: "order_cancelled", orderId });
+    }
+
+    await notifyUser(currentUser.uid, "Order Cancelled", `Your order #${orderId.slice(0,8).toUpperCase()} has been cancelled.`, { type: "order_cancelled", orderId });
 
     showToast("Order cancelled successfully", "success");
     await refreshUserData();
@@ -1246,13 +1576,13 @@ async function requestWithdrawal() {
 let currentOrderFilter = "all";
 
 async function renderOrders() {
-  const snap = await db
-    .collection("orders")
-    .where("buyerUid", "==", currentUser.uid)
-    .orderBy("createdAt", "desc")
-    .get();
-  const orders = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const [ordersSnap, reviewsSnap] = await Promise.all([
+    db.collection("orders").where("buyerUid", "==", currentUser.uid).orderBy("createdAt", "desc").get(),
+    db.collection("reviews").where("buyerUid", "==", currentUser.uid).get(),
+  ]);
+  const orders = ordersSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
   window.__cachedOrders = orders;
+  window.__reviewedKeys = new Set(reviewsSnap.docs.map((d) => `${d.data().orderId}:${d.data().itemIndex}`));
   paintOrders(orders);
 }
 
@@ -1334,7 +1664,15 @@ function closeOrderTracking() {
 }
 
 function paintOrders(orders) {
-  const filtered = currentOrderFilter === "all" ? orders : orders.filter((o) => o.status === currentOrderFilter);
+  const reviewedKeys = window.__reviewedKeys || new Set();
+  let filtered;
+  if (currentOrderFilter === "all") {
+    filtered = orders;
+  } else if (currentOrderFilter === "toreview") {
+    filtered = orders.filter((o) => (o.items || []).some((it, idx) => it.status === "delivered" && !reviewedKeys.has(`${o.id}:${idx}`)));
+  } else {
+    filtered = orders.filter((o) => o.status === currentOrderFilter);
+  }
   const el = document.getElementById("ordersList");
   el.innerHTML = filtered.length
     ? filtered
@@ -1346,12 +1684,19 @@ function paintOrders(orders) {
           <span class="order-status status-${o.status}">${o.status.replace(/_/g, ' ')}</span>
         </div>
         <div class="order-items-preview">
-          ${o.items.map((i) => `
+          ${o.items.map((i, idx) => `
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-              <img src="${allProducts.find(p => p.id === i.productId)?.image || 'https://placehold.co/300x300/eef2ff/6366f1?text=Product'}"
+              <img src="${allProducts.find(p => p.id === i.productId)?.imageUrl || 'https://placehold.co/300x300/eef2ff/6366f1?text=Product'}"
                 style="width:52px;height:52px;object-fit:cover;border-radius:10px;border:1px solid #e2e8f0;flex-shrink:0;background:#f1f5f9"
                 onerror="this.src='https://placehold.co/300x300/eef2ff/6366f1?text=Product'" />
-              <span style="font-size:13px;font-weight:500;color:var(--text)">${escapeHtml(i.name)} × ${i.qty}</span>
+              <span style="font-size:13px;font-weight:500;color:var(--text);flex:1">${escapeHtml(i.name)} × ${i.qty}</span>
+              ${i.status === 'delivered'
+                ? (reviewedKeys.has(`${o.id}:${idx}`)
+                    ? `<span style="font-size:11px;color:var(--success);font-weight:700">✓ Reviewed</span>`
+                    : `<button class="btn-outline btn-write-review-item" style="padding:6px 12px;font-size:11.5px" onclick='onWriteReviewClick("${o.id}", ${idx})'>
+                         <span class="material-icons-round" style="font-size:14px">rate_review</span> Review
+                       </button>`)
+                : ''}
             </div>`).join("")}
         </div>
         <div class="order-footer">
@@ -1419,7 +1764,7 @@ async function renderReferralTree() {
         <div class="referral-node-info">
           <strong>${escapeHtml(u.name)}</strong>
           <span class="referral-status ${isUserActiveThisMonth(u) ? "active" : "inactive"}">
-            ${isUserActiveThisMonth(u) ? "Active this month" : "Inactive — hasn't renewed"}
+            ${isUserActiveThisMonth(u) ? `Active until ${new Date(u.codeExpiresAt).toLocaleDateString("en-PK", {day:"numeric",month:"short"})}` : "Inactive — code expired"}
           </span>
         </div>
       </div>`).join("")
@@ -1438,8 +1783,8 @@ function renderActivationBanner() {
       <div style="background:var(--success-bg);border:1.5px solid #a7f3d0;border-radius:var(--radius-md);padding:16px;display:flex;align-items:center;gap:12px">
         <span class="material-icons-round" style="color:var(--success);font-size:28px">check_circle</span>
         <div style="flex:1">
-          <strong style="display:block;font-size:14px;color:#047857">Your code is Active this month!</strong>
-          <p style="font-size:12.5px;color:#065f46;margin-top:2px">You are earning commissions from your referrals.</p>
+          <strong style="display:block;font-size:14px;color:#047857">Your referral code is Active!</strong>
+<p style="font-size:12.5px;color:#065f46;margin-top:2px">Active until: ${new Date(userData.codeExpiresAt).toLocaleDateString("en-PK", {day:"numeric",month:"short",year:"numeric"})}</p>
         </div>
       </div>`;
   } else {
@@ -1511,12 +1856,13 @@ async function activateReferralCode() {
     try {
       // Deduct fee from wallet
       await db.collection("users").doc(currentUser.uid).update({
-        walletBalance: firebase.firestore.FieldValue.increment(-ACTIVATION_FEE),
-        totalSpent: firebase.firestore.FieldValue.increment(ACTIVATION_FEE),
-        activeMonthKey: currentMonthKey(),
-      });
-      await logTransaction(currentUser.uid, "debit", ACTIVATION_FEE, "Monthly referral code activation fee");
-      await notifyUser(currentUser.uid, "Code Activated!", "Your referral code is now active. Start earning commissions!");
+  walletBalance: firebase.firestore.FieldValue.increment(-ACTIVATION_FEE),
+  totalSpent: firebase.firestore.FieldValue.increment(ACTIVATION_FEE),
+  codeExpiresAt: getExpiryDate(),
+});
+    await logTransaction(currentUser.uid, "debit", ACTIVATION_FEE, "Monthly referral code activation fee");
+      await payActivationCommissions(currentUser.uid);
+      await notifyUser(currentUser.uid, "Code Activated!", "Your referral code is now active. Start earning commissions!", { type: "commission_earned" });
       await refreshUserData();
       showToast("Referral code activated successfully! 🎉", "success");
       renderActivationBanner();
@@ -1551,14 +1897,53 @@ async function activateReferralCode() {
   }
 }
 
+/**
+ * Pays L1 (15%) / L2 (10%) commission on a user's ₨100 referral-code
+ * ACTIVATION fee to their upline. Separate pool from product-purchase
+ * commissions — does not require the upline to be "active" themselves,
+ * it's paid purely off the referral relationship (l1InviterUid/l2InviterUid).
+ */
+async function payActivationCommissions(buyerUid) {
+  const buyerDoc = await db.collection("users").doc(buyerUid).get();
+  if (!buyerDoc.exists) return;
+  const buyer = buyerDoc.data();
+
+  const l1Uid = buyer.l1InviterUid || null;
+  const l2Uid = buyer.l2InviterUid || null;
+
+  if (l1Uid) {
+    const l1Amount = round2((ACTIVATION_FEE * ACTIVATION_L1_PCT) / 100);
+    await db.collection("users").doc(l1Uid).update({
+      walletBalance: firebase.firestore.FieldValue.increment(l1Amount),
+      totalEarned: firebase.firestore.FieldValue.increment(l1Amount),
+    });
+    await logTransaction(l1Uid, "credit", l1Amount, "Level 1 activation commission", null);
+    await notifyUser(l1Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l1Amount)} because your referral activated their code.`, { type: "commission_earned" });
+  }
+
+  if (l2Uid) {
+    const l2Amount = round2((ACTIVATION_FEE * ACTIVATION_L2_PCT) / 100);
+    await db.collection("users").doc(l2Uid).update({
+      walletBalance: firebase.firestore.FieldValue.increment(l2Amount),
+      totalEarned: firebase.firestore.FieldValue.increment(l2Amount),
+    });
+    await logTransaction(l2Uid, "credit", l2Amount, "Level 2 activation commission", null);
+    await notifyUser(l2Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l2Amount)} from your network's code activation.`, { type: "commission_earned" });
+  }
+}
+
 /* =====================================================================
    NOTIFICATIONS
 ===================================================================== */
-async function notifyUser(uid, title, body) {
+async function notifyUser(uid, title, body, extra = {}) {
   await db.collection("notifications").add({
     uid,
     title,
     body,
+    type: extra.type || null,
+    orderId: extra.orderId || null,
+    productId: extra.productId || null,
+    itemIndex: extra.itemIndex != null ? extra.itemIndex : null,
     read: false,
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
   });
@@ -1589,12 +1974,16 @@ async function renderNotifications() {
     ? notifs
         .map(
           (n) => `
-      <div class="notification-item ${n.read ? "" : "unread"}" onclick="markNotificationRead('${n.id}')">
-        <span class="material-icons-round">notifications</span>
+      <div class="notification-item ${n.read ? "" : "unread"}" onclick='handleNotificationClick(${JSON.stringify({
+            id: n.id, type: n.type || null, orderId: n.orderId || null,
+            productId: n.productId || null, itemIndex: n.itemIndex != null ? n.itemIndex : null,
+          })})'>
+        <span class="material-icons-round">${n.type === "review_prompt" ? "rate_review" : "notifications"}</span>
         <div>
           <strong>${escapeHtml(n.title)}</strong>
           <p>${escapeHtml(n.body)}</p>
           <small>${formatDate(n.createdAt)}</small>
+          ${n.type === "review_prompt" ? `<span class="notif-cta">Tap to leave a review →</span>` : ""}
         </div>
       </div>`
         )
@@ -1612,6 +2001,119 @@ async function renderNotifications() {
 async function markNotificationRead(id) {
   await db.collection("notifications").doc(id).update({ read: true });
   loadNotificationsBadge();
+}
+
+async function handleNotificationClick(data) {
+  await markNotificationRead(data.id);
+  if (data.type === "review_prompt" && data.orderId && data.productId) {
+    const alreadyReviewed = await hasReviewedItem(data.orderId, data.itemIndex);
+    if (alreadyReviewed) return showToast("You've already reviewed this item. Thank you!", "success");
+    const orderDoc = await db.collection("orders").doc(data.orderId).get();
+    if (!orderDoc.exists) return showToast("Order not found", "error");
+    const order = orderDoc.data();
+    const item = (order.items || [])[data.itemIndex];
+    if (!item) return showToast("Item not found", "error");
+    const product = allProducts.find((p) => p.id === data.productId);
+    openReviewModal(data.orderId, data.productId, data.itemIndex, item.sellerUid, item.name, product?.imageUrl);
+  } else if (data.type === "question_answered" && data.productId) {
+    openProduct(data.productId);
+  } else if (data.type === "order_cancelled" || data.type === "new_order") {
+    showPage("orders");
+  } else if (data.type === "commission_earned") {
+    showPage("wallet");
+  } else if (data.type === "new_referral") {
+    showPage("referral");
+  }
+}
+
+/* =====================================================================
+   HELP CENTER — LIVE CHAT
+   Each buyer gets one doc: supportChats/{uid}, with a messages subcollection.
+   Admin panel replies write sender:"admin" into that same subcollection.
+===================================================================== */
+function renderHelpChat() {
+  if (!currentUser) return;
+  const container = document.getElementById("helpChatMessages");
+  if (!container) return;
+  container.innerHTML = `<p class="muted" style="text-align:center;padding:20px 0">Loading conversation…</p>`;
+
+  if (helpChatUnsub) helpChatUnsub();
+
+  helpChatUnsub = db.collection("supportChats").doc(currentUser.uid)
+    .collection("messages")
+    .orderBy("createdAt", "asc")
+    .onSnapshot((snap) => {
+      const msgs = snap.docs.map((d) => d.data());
+      container.innerHTML = msgs.length
+        ? msgs.map((m) => `
+            <div class="help-chat-bubble ${m.sender === "buyer" ? "from-buyer" : "from-admin"}">
+              <p>${escapeHtml(m.text)}</p>
+              <small>${formatDate(m.createdAt)}</small>
+            </div>`).join("")
+        : `<p class="muted" style="text-align:center;padding:20px 0">Say hi! Ask us anything about your orders, wallet, or referrals.</p>`;
+      container.scrollTop = container.scrollHeight;
+    });
+}
+
+async function sendHelpChatMessage() {
+  const input = document.getElementById("helpChatInput");
+  const text = input.value.trim();
+  if (!text || !currentUser) return;
+  input.value = "";
+  try {
+    await db.collection("supportChats").doc(currentUser.uid).collection("messages").add({
+      sender: "buyer",
+      text,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    await db.collection("supportChats").doc(currentUser.uid).set({
+      buyerUid: currentUser.uid,
+      buyerName: userData?.name || "Buyer",
+      buyerEmail: userData?.email || "",
+      inviteCode: userData?.inviteCode || "",
+      l1InviterUid: userData?.l1InviterUid || null,
+      l2InviterUid: userData?.l2InviterUid || null,
+      lastMessage: text,
+      lastMessageAt: firebase.firestore.FieldValue.serverTimestamp(),
+      lastSender: "buyer",
+      unreadByAdmin: true,
+    }, { merge: true });
+  } catch (err) {
+    showToast("Couldn't send message: " + err.message, "error");
+  }
+}
+
+/* =====================================================================
+   FOOTER — CONTACT US FORM  →  admin panel "Requests" tab
+===================================================================== */
+async function submitContactForm() {
+  const name = document.getElementById("footerContactName").value.trim();
+  const email = document.getElementById("footerContactEmail").value.trim();
+  const message = document.getElementById("footerContactMessage").value.trim();
+
+  if (!name || !email || !message) return showToast("Please fill in all fields", "error");
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) return showToast("Please enter a valid email", "error");
+
+  showSpinner(true);
+  try {
+    await db.collection("supportRequests").add({
+      uid: currentUser ? currentUser.uid : null,
+      name,
+      email,
+      message,
+      status: "new",
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    document.getElementById("footerContactName").value = "";
+    document.getElementById("footerContactEmail").value = "";
+    document.getElementById("footerContactMessage").value = "";
+    showToast("Message sent! We'll get back to you soon.", "success");
+  } catch (err) {
+    showToast("Error: " + err.message, "error");
+  } finally {
+    showSpinner(false);
+  }
 }
 
 /* =====================================================================
@@ -1725,6 +2227,7 @@ function showPage(page) {
     home: "homePage",
     shop: "shopPage",
     product: "productPage",
+    store: "storePage",
     cart: "cartPage",
     wishlist: "wishlistPage",
     orders: "ordersPage",
@@ -1733,6 +2236,7 @@ function showPage(page) {
     profile: "profilePage",
     editProfile: "editProfilePage",
     notifications: "notificationsPage",
+    helpCenter: "helpCenterPage",
     categories: "categoriesPage",
     search: "searchPage",
     checkout: "checkoutPage",
@@ -1751,6 +2255,7 @@ function showPage(page) {
   if (page === "wallet") renderWalletPage();
   if (page === "referral") renderReferralTree();
   if (page === "notifications") renderNotifications();
+  if (page === "helpCenter") renderHelpChat();
   if (page === "categories") {
   document.getElementById("catTotalCount").textContent = `${categories.length} categories`;
   renderCategoriesGrid();
@@ -1823,6 +2328,246 @@ function startFlashSaleCountdown() {
     document.getElementById("cdM").textContent = String(m).padStart(2, "0");
     document.getElementById("cdS").textContent = String(s).padStart(2, "0");
   }, 1000);
+}
+
+/* =====================================================================
+   REVIEWS & Q&A
+===================================================================== */
+function starsHTML(rating, size = 16) {
+  const r = Math.round(Number(rating) || 0);
+  let html = "";
+  for (let i = 1; i <= 5; i++) {
+    html += `<span class="material-icons-round buyer-star ${i <= r ? "star-filled" : "star-empty"}" style="font-size:${size}px">star</span>`;
+  }
+  return html;
+}
+
+async function loadProductReviewsAndQna(productId, sellerUid) {
+  const summaryEl = document.getElementById("productRatingSummary");
+  const reviewsEl = document.getElementById("productReviewsSection");
+  const qnaEl = document.getElementById("productQnaSection");
+  if (!summaryEl || !reviewsEl || !qnaEl) return;
+
+  summaryEl.innerHTML = `<span class="rating-loading">Loading ratings…</span>`;
+  reviewsEl.innerHTML = "";
+  qnaEl.innerHTML = "";
+
+  try {
+    const [reviewsSnap, questionsSnap] = await Promise.all([
+      db.collection("reviews").where("productId", "==", productId).get(),
+      db.collection("questions").where("productId", "==", productId).get(),
+    ]);
+
+    const reviews = reviewsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    const questions = questionsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    const avg = reviews.length ? reviews.reduce((s, r) => s + (Number(r.rating) || 0), 0) / reviews.length : 0;
+
+    summaryEl.innerHTML = `
+      <div class="rating-summary-box">
+        <span class="rating-summary-num">${reviews.length ? avg.toFixed(1) : "—"}</span>
+        <div class="rating-summary-stars">${starsHTML(avg, 18)}</div>
+        <span class="rating-summary-count">${reviews.length} review${reviews.length === 1 ? "" : "s"}</span>
+      </div>`;
+
+    reviewsEl.innerHTML = `
+      <div class="section-header" style="margin-top:24px">
+        <h2 class="section-title"><span class="material-icons-round">reviews</span> Reviews</h2>
+      </div>
+      <div class="reviews-list">
+        ${reviews.length ? reviews.map((r) => `
+              <div class="review-card">
+                <div class="review-card-head">
+                  <img src="${r.buyerPhoto || avatarFallback(r.buyerName)}" class="review-avatar" alt="" />
+                  <div>
+                    <strong>${escapeHtml(r.buyerName || "Buyer")}</strong>
+                    <div class="review-card-stars">${starsHTML(r.rating, 14)}</div>
+                  </div>
+                  <span class="review-card-date">${formatDate(r.createdAt)}</span>
+                </div>
+                <p class="review-card-comment">${escapeHtml(r.comment || "")}</p>
+                ${(r.images || []).length ? `<div class="review-photos-row">${r.images.map((u) => `<img src="${escapeHtml(u)}" class="review-photo" alt="Review photo" />`).join("")}</div>` : ""}
+              </div>`).join("")
+          : `<p class="empty-inline-note">No reviews yet. Be the first to review this product after your order is delivered!</p>`}
+      </div>`;
+
+    const askBoxHtml = currentUser ? `
+        <div class="ask-question-box">
+          <input type="text" id="askQuestionInput" placeholder="Ask a question about this product…" maxlength="200" />
+          <button class="btn-primary" onclick="submitQuestion('${productId}', '${sellerUid || ""}')">
+            <span class="material-icons-round">send</span> Ask
+          </button>
+        </div>` : "";
+
+    qnaEl.innerHTML = `
+      <div class="section-header" style="margin-top:24px">
+        <h2 class="section-title"><span class="material-icons-round">help</span> Questions &amp; Answers</h2>
+      </div>
+      ${askBoxHtml}
+      <div class="qna-list">
+        ${questions.length ? questions.map((q) => `
+              <div class="qna-card">
+                <div class="qna-question"><span class="material-icons-round">person</span> ${escapeHtml(q.question || "")}</div>
+                ${q.status === "answered"
+                  ? `<div class="qna-answer"><span class="material-icons-round">storefront</span> ${escapeHtml(q.answer || "")}</div>`
+                  : `<div class="qna-pending">Awaiting seller's answer…</div>`}
+              </div>`).join("")
+          : `<p class="empty-inline-note">No questions yet. Ask the seller anything about this product.</p>`}
+      </div>`;
+  } catch (err) {
+    console.error("loadProductReviewsAndQna error:", err);
+    summaryEl.innerHTML = "";
+  }
+}
+
+async function submitQuestion(productId, sellerUid) {
+  const input = document.getElementById("askQuestionInput");
+  const question = input ? input.value.trim() : "";
+  if (!question) return showToast("Please type your question first", "error");
+  if (!currentUser) return showToast("Please log in to ask a question", "error");
+
+  showSpinner(true);
+  try {
+    await db.collection("questions").add({
+      productId, sellerUid: sellerUid || null, buyerUid: currentUser.uid,
+      buyerName: userData?.name || "Buyer", question, answer: null, status: "pending",
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    if (sellerUid) await notifyUser(sellerUid, "New product question", `${userData?.name || "A buyer"} asked a question about your product.`);
+    input.value = "";
+    showToast("Question submitted!", "success");
+    await loadProductReviewsAndQna(productId, sellerUid);
+  } catch (err) {
+    showToast("Error: " + err.message, "error");
+  } finally {
+    showSpinner(false);
+  }
+}
+
+function openReviewModal(orderId, productId, itemIndex, sellerUid, productName, productImage) {
+  reviewModalContext = { orderId, productId, itemIndex, sellerUid, productName };
+  reviewModalRating = 0;
+  reviewModalPhotos = [];
+  document.getElementById("reviewModalProductInfo").innerHTML = `
+    <img src="${productImage || placeholderImg()}" alt="${escapeHtml(productName || "")}" />
+    <span>${escapeHtml(productName || "Product")}</span>`;
+  document.getElementById("reviewCommentInput").value = "";
+  document.getElementById("reviewPhotoPreviewRow").innerHTML = "";
+  document.getElementById("reviewPhotoCount").textContent = "";
+  updateReviewStarPicker(0);
+  document.getElementById("reviewModalOverlay").classList.add("active");
+}
+
+function closeReviewModal() {
+  document.getElementById("reviewModalOverlay").classList.remove("active");
+  reviewModalContext = null;
+}
+
+function updateReviewStarPicker(rating) {
+  reviewModalRating = rating;
+  document.querySelectorAll("#reviewStarPicker .material-icons-round").forEach((el) => {
+    const val = parseInt(el.getAttribute("data-star"), 10);
+    el.classList.toggle("star-filled", val <= rating);
+    el.classList.toggle("star-empty", val > rating);
+  });
+}
+
+function initReviewStarPicker() {
+  const picker = document.getElementById("reviewStarPicker");
+  if (!picker) return;
+  picker.querySelectorAll(".material-icons-round").forEach((el) => {
+    el.addEventListener("click", () => updateReviewStarPicker(parseInt(el.getAttribute("data-star"), 10)));
+    el.addEventListener("mouseenter", () => {
+      const val = parseInt(el.getAttribute("data-star"), 10);
+      picker.querySelectorAll(".material-icons-round").forEach((s) => {
+        s.classList.toggle("star-hover", parseInt(s.getAttribute("data-star"), 10) <= val);
+      });
+    });
+    el.addEventListener("mouseleave", () => {
+      picker.querySelectorAll(".material-icons-round").forEach((s) => s.classList.remove("star-hover"));
+    });
+  });
+
+  const photoInput = document.getElementById("reviewPhotoInput");
+  if (photoInput) {
+    photoInput.addEventListener("change", async () => {
+      const files = Array.from(photoInput.files || []).slice(0, 5 - reviewModalPhotos.length);
+      if (!files.length) return;
+      const countEl = document.getElementById("reviewPhotoCount");
+      countEl.textContent = "Uploading…";
+      try {
+        for (const file of files) reviewModalPhotos.push(await uploadToCloudinary(file));
+        renderReviewPhotoPreviews();
+        countEl.textContent = `${reviewModalPhotos.length}/5 photos`;
+      } catch (err) {
+        showToast("Couldn't upload photo. Please try again.", "error");
+        countEl.textContent = "";
+      } finally {
+        photoInput.value = "";
+      }
+    });
+  }
+}
+
+function renderReviewPhotoPreviews() {
+  const row = document.getElementById("reviewPhotoPreviewRow");
+  if (!row) return;
+  row.innerHTML = reviewModalPhotos.map((url, idx) => `
+      <div class="review-photo-preview-item">
+        <img src="${escapeHtml(url)}" alt="Preview" />
+        <button type="button" onclick="removeReviewPhoto(${idx})"><span class="material-icons-round">close</span></button>
+      </div>`).join("");
+}
+
+function removeReviewPhoto(idx) {
+  reviewModalPhotos.splice(idx, 1);
+  renderReviewPhotoPreviews();
+  document.getElementById("reviewPhotoCount").textContent = reviewModalPhotos.length ? `${reviewModalPhotos.length}/5 photos` : "";
+}
+
+async function submitReview() {
+  if (!reviewModalContext) return;
+  if (reviewModalRating < 1) return showToast("Please select a star rating", "error");
+  const comment = document.getElementById("reviewCommentInput").value.trim();
+  const { orderId, productId, itemIndex, sellerUid, productName } = reviewModalContext;
+  const btn = document.getElementById("reviewSubmitBtn");
+  btn.disabled = true;
+  showSpinner(true);
+  try {
+    await db.collection("reviews").add({
+      productId, sellerUid: sellerUid || null, buyerUid: currentUser.uid,
+      buyerName: userData?.name || "Buyer", buyerPhoto: userData?.photoURL || "",
+      orderId, itemIndex, rating: reviewModalRating, comment, images: reviewModalPhotos,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    if (sellerUid) await notifyUser(sellerUid, "New review received!", `${userData?.name || "A buyer"} left a ${reviewModalRating}-star review on "${productName}".`);
+    showToast("Thank you for your review! 🎉", "success");
+    closeReviewModal();
+    renderOrders();
+  } catch (err) {
+    showToast("Error: " + err.message, "error");
+  } finally {
+    btn.disabled = false;
+    showSpinner(false);
+  }
+}
+
+async function hasReviewedItem(orderId, itemIndex) {
+  const snap = await db.collection("reviews").where("orderId", "==", orderId).where("itemIndex", "==", itemIndex).limit(1).get();
+  return !snap.empty;
+}
+
+async function onWriteReviewClick(orderId, itemIndex) {
+  const already = await hasReviewedItem(orderId, itemIndex);
+  if (already) return showToast("You've already reviewed this item. Thank you!", "success");
+  const order = (window.__cachedOrders || []).find((o) => o.id === orderId);
+  if (!order) return;
+  const item = order.items[itemIndex];
+  if (!item) return;
+  const product = allProducts.find((p) => p.id === item.productId);
+  openReviewModal(orderId, item.productId, itemIndex, item.sellerUid, item.name, product?.imageUrl);
 }
 
 /* =====================================================================
