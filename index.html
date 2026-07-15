@@ -33,8 +33,8 @@
       appId:             "1:500919238869:web:31671197977bacf8c9625c",
     };
     firebase.initializeApp(firebaseConfig);
-    const db   = firebase.firestore();
-    const auth = firebase.auth();
+let db   = firebase.firestore();
+let auth = firebase.auth();
   </script>
 </head>
 
@@ -88,7 +88,7 @@
       </button>
     </div>
 
-    <!-- Register Form -->
+  <!-- Register Form -->
     <div id="registerForm" class="auth-form">
       <div class="input-group">
         <span class="material-icons-round">person</span>
@@ -103,7 +103,11 @@
         <input type="password" id="regPassword" placeholder="Password (min 6 chars)" autocomplete="new-password" />
         <span class="material-icons-round toggle-pw" onclick="togglePw('regPassword')">visibility</span>
       </div>
-      
+      <div class="input-group">
+        <span class="material-icons-round">card_giftcard</span>
+        <input type="text" id="regReferral" placeholder="Referral code (required)" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" />
+      </div>
+
       <button class="btn-primary full-width" onclick="registerUser()">
         <span class="material-icons-round">person_add</span> Create Account
       </button>
@@ -151,9 +155,8 @@
         <span class="material-icons-round">notifications</span>
         <span class="badge" id="notifBadge" style="display:none">0</span>
       </button>
-      <button class="icon-btn" onclick="showPage('wishlist')" title="Wishlist">
-        <span class="material-icons-round">favorite_border</span>
-        <span class="badge" id="wishlistBadge" style="display:none">0</span>
+      <button class="icon-btn" onclick="showPage('referral')" title="Referrals">
+        <span class="material-icons-round">people</span>
       </button>
       <button class="icon-btn" onclick="showPage('cart')" title="Cart">
         <span class="material-icons-round">shopping_cart</span>
@@ -218,6 +221,7 @@
       <a class="sidebar-link" onclick="showPage('wishlist');toggleSidebar()"><span class="material-icons-round">favorite</span>Wishlist</a>
       <a class="sidebar-link" onclick="showPage('cart');toggleSidebar()"><span class="material-icons-round">shopping_cart</span>Cart</a>
       <a class="sidebar-link" onclick="showPage('referral');toggleSidebar()"><span class="material-icons-round">people</span>Referrals</a>
+      <a class="sidebar-link" onclick="showPage('helpCenter');toggleSidebar()"><span class="material-icons-round">support_agent</span>Help Center</a>
       <a class="sidebar-link" onclick="showPage('profile');toggleSidebar()"><span class="material-icons-round">manage_accounts</span>Profile</a>
       <a class="sidebar-link danger" onclick="logoutUser()"><span class="material-icons-round">logout</span>Logout</a>
     </nav>
@@ -257,20 +261,20 @@
       </div>
 
       <!-- Stats Bar -->
-      <div class="stats-bar">
-        <div class="stat-item">
+    <div class="stats-bar">
+        <div class="stat-item" onclick="showPage('referral')">
           <span class="material-icons-round">group</span>
           <div><strong id="statReferrals">0</strong><span>Referrals</span></div>
         </div>
-        <div class="stat-item">
+        <div class="stat-item" onclick="showPage('orders')">
           <span class="material-icons-round">shopping_bag</span>
           <div><strong id="statOrders">0</strong><span>Orders</span></div>
         </div>
-        <div class="stat-item">
+        <div class="stat-item" onclick="showPage('wallet')">
           <span class="material-icons-round">account_balance_wallet</span>
           <div><strong id="statWallet">₨ 0</strong><span>Wallet</span></div>
         </div>
-        <div class="stat-item">
+        <div class="stat-item" onclick="showPage('profile')">
           <span class="material-icons-round">star</span>
           <div><strong id="statLevel">Starter</strong><span>Level</span></div>
         </div>
@@ -336,6 +340,9 @@
         </div>
       </div>
 
+      <div id="shopCategoriesScroll" class="categories-scroll" style="margin-bottom:10px"></div>
+      <div id="activeCategoryBadge" class="active-category-badge" style="display:none"></div>
+
       <!-- Filter Panel -->
       <div id="filterPanel" class="filter-panel hidden">
         <div class="filter-group">
@@ -365,6 +372,14 @@
         <span class="material-icons-round">arrow_back</span> Back
       </button>
       <div id="productDetail" class="product-detail"></div>
+    </section>
+
+    <!-- ══ SELLER STORE PAGE ══ -->
+    <section id="storePage" class="tab-panel">
+      <button class="back-btn" onclick="showPage('shop')">
+        <span class="material-icons-round">arrow_back</span> Back
+      </button>
+      <div id="storeContent"></div>
     </section>
 
     <!-- ══ CART PAGE ══ -->
@@ -415,6 +430,7 @@
         <button class="order-tab" onclick="filterOrders('pending')">Pending</button>
         <button class="order-tab" onclick="filterOrders('shipped')">Shipped</button>
         <button class="order-tab" onclick="filterOrders('delivered')">Delivered</button>
+        <button class="order-tab" onclick="filterOrders('toreview')">To Review</button>
       </div>
       <div id="ordersList" class="orders-list"></div>
     </section>
@@ -595,6 +611,23 @@
       <div id="notificationsList" class="notifications-list"></div>
     </section>
 
+    <!-- ══ HELP CENTER PAGE ══ -->
+    <section id="helpCenterPage" class="tab-panel">
+      <h2 class="section-title">
+        <span class="material-icons-round">support_agent</span> Help Center
+      </h2>
+      <p class="muted" style="margin-bottom:16px">Chat with our support team — we usually reply within a few hours.</p>
+      <div class="help-chat-box">
+        <div id="helpChatMessages" class="help-chat-messages"></div>
+        <div class="help-chat-input-row">
+          <input type="text" id="helpChatInput" placeholder="Type your message…" onkeydown="if(event.key==='Enter'){sendHelpChatMessage()}" />
+          <button class="icon-btn" onclick="sendHelpChatMessage()" title="Send">
+            <span class="material-icons-round">send</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
 <!-- ══ CATEGORIES PAGE ══ -->
 <section id="categoriesPage" class="tab-panel">
   <div class="section-header" style="margin-bottom:20px">
@@ -710,6 +743,56 @@
 
   </main><!-- /page-container -->
 
+  <!-- ─── FOOTER ─── -->
+  <footer class="app-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <div class="logo">
+          <img src="https://img.icons8.com/fluency/48/shopping-bag.png" style="width:26px;height:26px" alt="Logo" />
+          <span>ShopEarn</span>
+        </div>
+        <p>Shop smart, refer friends, and earn real commissions — all in one place.</p>
+        <div class="footer-socials">
+          <a href="https://instagram.com" target="_blank" rel="noopener" title="Instagram"><span class="material-icons-round">photo_camera</span></a>
+          <a href="https://facebook.com" target="_blank" rel="noopener" title="Facebook"><span class="material-icons-round">thumb_up</span></a>
+          <a href="https://tiktok.com" target="_blank" rel="noopener" title="TikTok"><span class="material-icons-round">music_note</span></a>
+          <a href="https://youtube.com" target="_blank" rel="noopener" title="YouTube"><span class="material-icons-round">smart_display</span></a>
+        </div>
+      </div>
+
+      <div class="footer-links">
+        <h4>Quick Links</h4>
+        <a onclick="showPage('shop')">Shop</a>
+        <a onclick="showPage('wallet')">Wallet</a>
+        <a onclick="showPage('referral')">Referral Program</a>
+        <a onclick="showPage('helpCenter')">Help Center</a>
+      </div>
+
+      <div class="footer-contact">
+        <h4>Contact Us</h4>
+        <p>Have a question or issue? Send us a message and we'll get back to you.</p>
+        <div class="input-group">
+          <span class="material-icons-round">person</span>
+          <input type="text" id="footerContactName" placeholder="Your name" />
+        </div>
+        <div class="input-group">
+          <span class="material-icons-round">email</span>
+          <input type="email" id="footerContactEmail" placeholder="Your email" />
+        </div>
+        <div class="input-group" style="align-items:flex-start">
+          <span class="material-icons-round" style="margin-top:12px">message</span>
+          <textarea id="footerContactMessage" rows="3" placeholder="Your message…" style="flex:1;background:transparent;border:none;outline:none;font-family:inherit;font-size:14.5px;color:var(--text);padding:10px 0;resize:vertical"></textarea>
+        </div>
+        <button class="btn-primary full-width" onclick="submitContactForm()">
+          <span class="material-icons-round">send</span> Send Message
+        </button>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 ShopEarn. All rights reserved.</span>
+    </div>
+  </footer>
+
 </div><!-- /appShell -->
 
 <!-- ======================================================
@@ -732,6 +815,36 @@
   </div>
   <p class="spinner-text">ShopEarn</p>
 </div>
+<!-- REVIEW SUBMISSION OVERLAY -->
+<div id="reviewModalOverlay" class="overlay" style="align-items:flex-end;padding:0">
+  <div class="review-modal-sheet">
+    <div class="review-modal-header">
+      <h3><span class="material-icons-round">rate_review</span> Rate &amp; Review</h3>
+      <button class="icon-btn" onclick="closeReviewModal()"><span class="material-icons-round">close</span></button>
+    </div>
+    <div id="reviewModalProductInfo" class="review-modal-product"></div>
+    <div class="review-star-picker" id="reviewStarPicker">
+      <span class="material-icons-round" data-star="1">star</span>
+      <span class="material-icons-round" data-star="2">star</span>
+      <span class="material-icons-round" data-star="3">star</span>
+      <span class="material-icons-round" data-star="4">star</span>
+      <span class="material-icons-round" data-star="5">star</span>
+    </div>
+    <textarea id="reviewCommentInput" rows="4" placeholder="Share your experience with this product…" maxlength="500"></textarea>
+    <div class="review-photo-upload-row">
+      <label for="reviewPhotoInput" class="btn-outline review-photo-upload-btn">
+        <span class="material-icons-round">add_photo_alternate</span> Add Photos
+      </label>
+      <input type="file" id="reviewPhotoInput" accept="image/*" multiple hidden />
+      <span id="reviewPhotoCount" class="muted"></span>
+    </div>
+    <div id="reviewPhotoPreviewRow" class="review-photo-preview-row"></div>
+    <button class="btn-primary full-width" id="reviewSubmitBtn" onclick="submitReview()">
+      <span class="material-icons-round">check_circle</span> Submit Review
+    </button>
+  </div>
+</div>
+
 <!-- ORDER TRACKING OVERLAY -->
 <div id="orderTrackingOverlay" class="overlay" style="align-items:flex-end;padding:0">
   <div style="background:var(--surface);width:100%;max-width:600px;margin:0 auto;border-radius:22px 22px 0 0;padding:24px;max-height:90vh;overflow-y:auto">
