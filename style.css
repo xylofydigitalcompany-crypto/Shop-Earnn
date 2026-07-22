@@ -1,5 +1,5 @@
 /* =====================================================================
-   ShopEarn — style.css
+   PK Mart — style.css
    Professional, mobile-first e-commerce + referral UI
    Matches index.html structure + app.js generated markup 1:1
 ===================================================================== */
@@ -1919,3 +1919,180 @@ body.preview-mode .page-container {
   font-size: 13.5px;
 }
 .help-chat-input-row input:focus { border-color: var(--primary); }
+/* ===== Extra small screens ===== */
+@media (max-width: 480px) {
+  .form-group input, .form-group select, .form-group textarea { font-size: 16px; } /* stops iOS auto-zoom */
+  .password-toggle-btn, .modal-close, .notif-bell-btn, .menu-toggle { width: 44px; height: 44px; }
+  .products-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .modal-overlay { padding: 0; align-items: flex-end; }
+  .modal-card { max-width: 100%; width: 100%; border-radius: var(--radius-lg) var(--radius-lg) 0 0; max-height: 94vh; }
+  .auth-card { padding: 26px 18px 22px; margin: 16px auto; }
+  .shop-name-display { display: none; }
+  .topbar-title { font-size: 17px; }
+  .content { padding: 14px 12px 100px; }
+  .modal-actions { flex-direction: column-reverse; align-items: stretch; gap: 8px; }
+  .modal-actions-right { flex-direction: column-reverse; width: 100%; margin-left: 0; gap: 8px; }
+  .modal-actions-right .btn, #productDeleteBtn { width: 100%; }
+  .stat-cards { grid-template-columns: 1fr; }
+}
+body { padding-bottom: env(safe-area-inset-bottom); }
+
+/* ===== Referral / PK Mart Membership Card ===== */
+.member-card-wrap { margin: 24px 0; }
+.member-card-wrap h3 { margin-bottom: 12px; }
+.member-card {
+  width: 100%;
+  max-width: 380px;
+  aspect-ratio: 1.586 / 1;
+  border-radius: 16px;
+  padding: 20px 22px;
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary), var(--accent));
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.member-card::before {
+  content: "";
+  position: absolute;
+  top: -40px; right: -40px;
+  width: 160px; height: 160px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.12);
+}
+.member-card::after {
+  content: "";
+  position: absolute;
+  bottom: -60px; left: -30px;
+  width: 180px; height: 180px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.08);
+}
+.member-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 1;
+}
+.member-card-brand {
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.5px;
+}
+.member-card-brand span { opacity: .85; font-weight: 500; font-size: 11px; display:block; letter-spacing: 1px; }
+.member-card-chip {
+  width: 38px; height: 28px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #fde68a, #fbbf24);
+  z-index: 1;
+}
+.member-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.member-card-code-label {
+  font-size: 10px;
+  opacity: .75;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  z-index: 1;
+}
+.member-card-code {
+  font-family: 'Courier New', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  z-index: 1;
+}
+
+/* ── Event Hero Slider (19:6) ── */
+.event-hero-slider {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 19 / 6;
+  border-radius: 18px;
+  overflow: hidden;
+  margin-bottom: 20px;
+  background: #eef2ff;
+}
+.event-hero-slides {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.event-hero-slide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.event-hero-slide.active { opacity: 1; }
+.event-hero-dots {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 2;
+}
+.event-hero-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.55);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.event-hero-dot.active { background: #fff; width: 18px; border-radius: 4px; }
+
+/* ===== Event Board Popup ===== */
+.event-board-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  animation: fadeIn .25s ease;
+}
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+.event-board-popup {
+  position: relative;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  max-width: 380px; width: 100%;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  animation: popIn .3s ease;
+}
+@keyframes popIn { from { transform: scale(.9); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+.event-board-close {
+  position: absolute; top: 10px; right: 10px; z-index: 2;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(15,23,42,.6); color: #fff; border: none;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.event-board-image { width: 100%; display: block; object-fit: cover; }
+.event-board-timer { padding: 14px 18px 4px; text-align: center; }
+.event-board-timer-text { display: block; font-weight: 700; color: var(--danger); font-size: 13px; margin-bottom: 8px; }
+.event-board-countdown { display: flex; justify-content: center; gap: 10px; }
+.event-board-cta { display: block; width: calc(100% - 36px); margin: 14px 18px 18px; text-align: center; }
+
+/* ===== Event badge on product card ===== */
+.event-tag {
+  position: absolute; bottom: 6px; left: 6px;
+  background: var(--primary); color: #fff;
+  font-size: 9.5px; font-weight: 700;
+  padding: 2px 7px; border-radius: 20px;
+  max-width: 85%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
