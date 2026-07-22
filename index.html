@@ -3,39 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ShopEarn | Smart Ecommerce</title>
+  <title>PK Mart | Smart Ecommerce</title>
 
   <!-- Favicon -->
   <link rel="icon" href="https://img.icons8.com/fluency/48/shopping-bag.png" />
 
   <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://www.gstatic.com" />
+  <link rel="preconnect" href="https://res.cloudinary.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet" />
 
   <!-- CSS -->
   <link rel="stylesheet" href="style.css" />
-
-  <!-- Firebase Compat v10 -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-
-
-
-  <!-- Firebase Init (replace with your config) -->
-  <script>
-    const firebaseConfig = {
-      apiKey:            "AIzaSyCgnHRtenBe0K48Y7KaoNieGy-HOvAjpO4",
-      authDomain:        "bazaarprodemo.firebaseapp.com",
-      projectId:         "bazaarprodemo",
-      storageBucket:     "bazaarprodemo.firebasestorage.app",
-      messagingSenderId: "500919238869",
-      appId:             "1:500919238869:web:31671197977bacf8c9625c",
-    };
-    firebase.initializeApp(firebaseConfig);
-let db   = firebase.firestore();
-let auth = firebase.auth();
-  </script>
 </head>
 
 <body>
@@ -54,7 +36,7 @@ let auth = firebase.auth();
     <!-- Logo -->
     <div class="auth-logo">
       <span class="material-icons-round">shopping_bag</span>
-      <span>ShopEarn</span>
+      <span>PK Mart</span>
     </div>
     <p class="auth-tagline">Shop. Refer. Earn. Repeat.</p>
 
@@ -138,7 +120,7 @@ let auth = firebase.auth();
           -webkit-text-fill-color: transparent;
           background-clip: text;
           letter-spacing:0.5px;
-        ">ShopEarn</span>
+        ">PK Mart</span>
       </a>
     </div>
 
@@ -206,7 +188,7 @@ let auth = firebase.auth();
           -webkit-text-fill-color: transparent;
           background-clip: text;
           letter-spacing:0.5px;
-        ">ShopEarn</span>
+        ">PK Mart</span>
       </div>
       <button class="icon-btn" onclick="toggleSidebar()">
         <span class="material-icons-round">close</span>
@@ -235,7 +217,7 @@ let auth = firebase.auth();
     <section id="homePage" class="tab-panel active">
 
       <!-- Hero Banner -->
-      <div class="hero-banner">
+      <div class="hero-banner" id="defaultHeroBanner">
         <div class="hero-content">
           <span class="hero-badge">🎉 New Season Sale</span>
           <h1>Shop Smart,<br /><span>Earn More</span></h1>
@@ -259,6 +241,34 @@ let auth = firebase.auth();
           </div>
         </div>
       </div>
+
+      <!-- Admin-managed Hero Slider (always shows if admin uploaded slides, auto-scrolls every 4s) -->
+      <div class="event-hero-slider" id="eventHeroSlider" style="display:none">
+        <div class="event-hero-slides" id="eventHeroSlides"></div>
+        <div class="event-hero-dots" id="eventHeroDots"></div>
+      </div>
+
+      <!-- Event Timer (only visible during an event) -->
+      <div class="flash-sale-banner" id="eventSection" style="display:none">
+        <div class="flash-info">
+          <span class="material-icons-round">event</span>
+          <div>
+            <h3 id="eventTitle">Event</h3>
+            <p>Ends in</p>
+          </div>
+        </div>
+        <div class="countdown">
+          <div class="cd-unit"><span id="evH">00</span><small>hrs</small></div>
+          <div class="cd-unit"><span id="evM">00</span><small>min</small></div>
+          <div class="cd-unit"><span id="evS">00</span><small>sec</small></div>
+        </div>
+      </div>
+
+      <!-- Event Products (only visible during an event) -->
+      <div class="section-header" id="eventProductsHeader" style="display:none">
+        <h2 class="section-title">🎯 <span id="eventProductsTitle">Event Picks</span></h2>
+      </div>
+      <div id="eventProductGrid" class="product-grid"></div>
 
       <!-- Stats Bar -->
     <div class="stats-bar">
@@ -532,6 +542,25 @@ let auth = firebase.auth();
         </div>
       </div>
 
+      <!-- Your PK Mart Card -->
+      <div class="member-card-wrap" id="myCardSection" style="display:none">
+        <h3>Your PK Mart Card</h3>
+        <div class="member-card">
+          <div class="member-card-top">
+            <div class="member-card-brand">PK Mart<span>MEMBERSHIP CARD</span></div>
+            <div class="member-card-chip"></div>
+          </div>
+          <div>
+            <div class="member-card-code-label">Referral Code</div>
+            <div class="member-card-code" id="myCardCode">—</div>
+            <div class="member-card-name" id="myCardName">—</div>
+          </div>
+        </div>
+        <p id="myCardStatusMsg" style="font-size:12.5px;color:var(--text-secondary);margin-top:8px">
+          Loading card status...
+        </p>
+      </div>
+
       <!-- Referral Tree -->
       <h3 class="sub-title">Your Network</h3>
       <div id="referralTree" class="referral-tree"></div>
@@ -749,7 +778,7 @@ let auth = firebase.auth();
       <div class="footer-brand">
         <div class="logo">
           <img src="https://img.icons8.com/fluency/48/shopping-bag.png" style="width:26px;height:26px" alt="Logo" />
-          <span>ShopEarn</span>
+          <span>PK Mart</span>
         </div>
         <p>Shop smart, refer friends, and earn real commissions — all in one place.</p>
         <div class="footer-socials">
@@ -789,7 +818,7 @@ let auth = firebase.auth();
       </div>
     </div>
     <div class="footer-bottom">
-      <span>© 2026 ShopEarn. All rights reserved.</span>
+      <span>© 2026 PK Mart. All rights reserved.</span>
     </div>
   </footer>
 
@@ -813,7 +842,7 @@ let auth = firebase.auth();
       <img src="https://img.icons8.com/fluency/48/shopping-bag.png" alt="Logo" />
     </div>
   </div>
-  <p class="spinner-text">ShopEarn</p>
+  <p class="spinner-text">PK Mart</p>
 </div>
 <!-- REVIEW SUBMISSION OVERLAY -->
 <div id="reviewModalOverlay" class="overlay" style="align-items:flex-end;padding:0">
@@ -858,9 +887,48 @@ let auth = firebase.auth();
   </div>
 </div>
 
-<!-- ─── App JS ─── -->
-<script src="app.js"></script>
+<!-- Firebase Compat v10 -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey:            "AIzaSyCgnHRtenBe0K48Y7KaoNieGy-HOvAjpO4",
+    authDomain:        "bazaarprodemo.firebaseapp.com",
+    projectId:         "bazaarprodemo",
+    storageBucket:     "bazaarprodemo.firebasestorage.app",
+    messagingSenderId: "500919238869",
+    appId:             "1:500919238869:web:31671197977bacf8c9625c",
+  };
+  firebase.initializeApp(firebaseConfig);
+  let db   = firebase.firestore();
+  let auth = firebase.auth();
+  db.enablePersistence({ synchronizeTabs: true }).catch((err) => {
+    console.warn("Offline cache not enabled:", err.code);
+  });
+</script>
 
+<!-- ─── App JS ─── -->
+<!-- EVENT BOARD POPUP -->
+  <div id="eventBoardOverlay" class="event-board-overlay" style="display:none">
+    <div class="event-board-popup">
+      <button type="button" class="event-board-close" onclick="closeEventBoardPopup()">
+        <span class="material-icons-round">close</span>
+      </button>
+      <img id="eventBoardImage" class="event-board-image" src="" alt="Event" />
+      <div class="event-board-timer">
+        <span id="eventBoardTimerText" class="event-board-timer-text">Hurry up! Time is going</span>
+        <div class="event-board-countdown">
+          <div class="cd-unit"><span id="ebH">00</span><small>hrs</small></div>
+          <div class="cd-unit"><span id="ebM">00</span><small>min</small></div>
+          <div class="cd-unit"><span id="ebS">00</span><small>sec</small></div>
+        </div>
+      </div>
+      <button type="button" id="eventBoardCta" class="btn-primary event-board-cta" onclick="handleEventBoardCta()">Shop Now</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
 ```
