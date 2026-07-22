@@ -175,6 +175,15 @@ function setupAuthListener() {
       await bootstrapApp();
       const savedPage = sessionStorage.getItem("currentPage");
       if (savedPage && savedPage !== "home") showPage(savedPage);
+
+      // Returning from SafePay checkout?
+      const params = new URLSearchParams(window.location.search);
+      const spOrder = params.get("safepay_order");
+      const spTracker = params.get("tracker");
+      if (spOrder && spTracker) {
+        await completeSafepayOrder(spOrder, spTracker);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
     } else {
       currentUser = null;
       userData = null;
@@ -1224,6 +1233,15 @@ function switchPayment(method) {
     box.innerHTML = "";
     return;
   }
+  if (method === "safepay") {
+    box.style.display = "block";
+    box.innerHTML = `
+      <div style="text-align:center;padding:8px 0;font-size:13px;color:var(--text-secondary)">
+        <span class="material-icons-round" style="font-size:22px;display:block;margin-bottom:6px">lock</span>
+        You'll be redirected to SafePay's secure page to pay by card.
+      </div>`;
+    return;
+  }
   box.style.display = "block";
   if (method === "jazzcash") {
     box.innerHTML = `
@@ -1411,6 +1429,8 @@ async function placeOrder() {
         showSpinner(false);
         return showToast("Please enter your transaction ID", "error");
       }
+    } else if (paymentMethod === "safepay") {
+      // no txnId — SafePay confirms payment itself
     } else if (paymentMethod === "wallet") {
       if ((userData.walletBalance || 0) < total) {
         showSpinner(false);
@@ -1483,7 +1503,7 @@ sellerUids: [...new Set(items.map((i) => i.sellerUid).filter(Boolean))],
       total,
       walletUsed: paymentMethod === "wallet" ? total : 0,
       paymentMethod,
-      status: paymentMethod === "cod" ? "pending" : "pending_verification",
+      status: paymentMethod === "cod" ? "pending" : (paymentMethod === "safepay" ? "awaiting_payment" : "pending_verification"),
       txnId: document.getElementById("txnId")?.value.trim() || null,
       address: { name, phone, address, city, postal },
       commissionsPaid,
@@ -1494,6 +1514,22 @@ sellerUids: [...new Set(items.map((i) => i.sellerUid).filter(Boolean))],
     const distinctSellerUids = [...new Set(items.map((i) => i.sellerUid).filter(Boolean))];
     for (const sUid of distinctSellerUids) {
       await notifyUser(sUid, "New order received! 🛍️", `You have a new order (#${orderRef.id.slice(0, 8).toUpperCase()}) waiting for confirmation.`, { type: "new_order", orderId: orderRef.id });
+    }
+
+    // ---- 3c. SafePay: redirect to hosted checkout, finish the order LATER on return ----
+    if (paymentMethod === "safepay") {
+      const resp = await fetch("/api/safepay-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: orderRef.id, amountPKR: total })
+      });
+      const data = await resp.json();
+      if (!data.url) {
+        showSpinner(false);
+        return showToast("Could not start SafePay checkout", "error");
+      }
+      window.location.href = data.url; // browser navigates away here
+      return;
     }
 
     // ---- 4. Settle buyer's wallet if they paid by wallet ----
@@ -1549,6 +1585,67 @@ sellerUids: [...new Set(items.map((i) => i.sellerUid).filter(Boolean))],
  } catch (err) {
   console.error(err);
   showToast("Error: " + err.message, "error");
+  } finally {
+    showSpinner(false);
+  }
+}
+
+async function completeSafepayOrder(orderId, trackerToken) {
+  showSpinner(true);
+  try {
+    // Ask our own server to check the REAL status with SafePay (never trust the URL alone)
+    const verifyRes = await fetch("/api/safepay-verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tracker: trackerToken })
+    });
+    const verifyData = await verifyRes.json();
+
+    if (!verifyData.paid) {
+      showToast("Payment not completed. Order kept as awaiting payment.", "error");
+      showSpinner(false);
+      return;
+    }
+
+    const orderRef = db.collection("orders").doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) { showSpinner(false); return; }
+    const order = orderSnap.data();
+
+    if (order.status !== "awaiting_payment") {
+      // already completed (e.g. page refreshed) — nothing to do
+      showSpinner(false);
+      showPage("orders");
+      renderOrders();
+      return;
+    }
+
+    await orderRef.update({ status: "pending", txnId: trackerToken });
+
+    await db.collection("users").doc(order.buyerUid).update({
+      totalSpent: firebase.firestore.FieldValue.increment(order.total),
+    });
+
+    await markUserActiveThisMonth(order.buyerUid);
+
+    for (const item of order.items) {
+      await db.collection("products").doc(item.productId).update({
+        stock: firebase.firestore.FieldValue.increment(-item.qty),
+      });
+    }
+
+    cart = [];
+    await saveCart();
+    await refreshUserData();
+    await loadProducts();
+
+    showToast("Payment successful! Order placed 🎉", "success");
+    updateCartBadge();
+    showPage("orders");
+    renderOrders();
+  } catch (err) {
+    console.error(err);
+    showToast("Error finishing order: " + err.message, "error");
   } finally {
     showSpinner(false);
   }
