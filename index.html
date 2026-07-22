@@ -750,6 +750,10 @@
     <input type="radio" name="payMethod" value="wallet" onchange="switchPayment(this.value)" />
     <span class="material-icons-round">account_balance_wallet</span> Wallet Balance
   </label>
+  <label class="payment-option">
+    <input type="radio" name="payMethod" value="safepay" onchange="switchPayment(this.value)" />
+    <span class="material-icons-round">lock</span> Card / SafePay
+  </label>
 </div>
 
 <!-- Payment details box — shows instructions per method -->
