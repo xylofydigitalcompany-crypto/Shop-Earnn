@@ -34,29 +34,17 @@ export default async function handler(req, res) {
     return res.status(500).json({ step: "session.setup", error: err.message });
   }
 
-  let authTokenValue;
-  try {
-    const authToken = await safepay.auth.passport.create();
-    authTokenValue = authToken?.data;
-    if (!authTokenValue) {
-      return res.status(500).json({ step: "auth.passport.create", error: "No auth token", details: authToken });
-    }
-  } catch (err) {
-    return res.status(500).json({ step: "auth.passport.create", error: err.message });
-  }
+  const origin = `https://${req.headers.host}`;
+  const params = new URLSearchParams({
+    env: "sandbox",
+    beacon: trackerToken,
+    source: "website",
+    order_id: orderId,
+    redirect_url: `${origin}/?safepay_order=${orderId}&tracker=${trackerToken}`,
+    cancel_url: `${origin}/?safepay_order=${orderId}&tracker=${trackerToken}&cancelled=1`,
+  });
 
-  try {
-    const origin = `https://${req.headers.host}`;
-    const checkoutUrl = safepay.checkouts.payment.create({
-      tracker: trackerToken,
-      tbt: authTokenValue,
-      environment: "sandbox",
-      source: "hosted",
-      redirect_url: `${origin}/?safepay_order=${orderId}&tracker=${trackerToken}`,
-      cancel_url: `${origin}/?safepay_order=${orderId}&tracker=${trackerToken}&cancelled=1`,
-    });
-    return res.status(200).json({ url: checkoutUrl, tracker: trackerToken });
-  } catch (err) {
-    return res.status(500).json({ step: "checkouts.payment.create", error: err.message });
-  }
+  const checkoutUrl = `https://sandbox.api.getsafepay.com/components?${params.toString()}`;
+
+  return res.status(200).json({ url: checkoutUrl, tracker: trackerToken });
 }
