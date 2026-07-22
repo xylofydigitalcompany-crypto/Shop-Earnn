@@ -1,5 +1,5 @@
 /* =====================================================================
-   ShopEarn — app.js
+   PK Mart — app.js
    Full frontend logic wired to Firebase (Auth + Firestore) and Stripe.
 
    FIRESTORE DATA MODEL
@@ -124,7 +124,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
   setupAuthListener();
-  startFlashSaleCountdown();
   initReviewStarPicker();
 });
 
@@ -188,10 +187,14 @@ function setupAuthListener() {
 
 async function bootstrapApp() {
   updateHeaderForSidebar();
-  await Promise.all([loadProducts(), loadCategories()]);
+  await loadProducts();
+  await loadCategories();
+  await loadPlatformSettings();
   renderHomeStats();
   renderCategoriesScroll();
   renderHomeProducts();
+  renderEventHero();
+  startFlashSaleCountdown();
   renderProfile();
   await loadCart();
   await loadWishlistBadge();
@@ -289,7 +292,7 @@ async function registerUser() {
       referralCodeUsed: referralCodeUsed || null,
       inviterUid,
     });
-    showToast("Account created! Welcome to ShopEarn 🎉", "success");
+    showToast("Account created! Welcome to PK Mart 🎉", "success");
   } catch (err) {
     showToast(err.message, "error");
   } finally {
@@ -416,7 +419,7 @@ async function markUserActiveThisMonth(uid) {
 ===================================================================== */
 async function loadProducts() {
   const snap = await db.collection("products").get();
-  allProducts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  allProducts = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => p.isActive !== false);
   filteredProducts = [...allProducts];
 }
 
@@ -488,6 +491,7 @@ function productCardHTML(p) {
   const badge = p.isFlashSale
     ? `<span class="commission-tag" style="background:#ef4444">${p.discountPct}% OFF</span>`
     : `<span class="commission-tag">Earn ${L1_COMMISSION_PCT}%</span>`;
+  const eventTag = p.activeEventName ? `<span class="event-tag">${escapeHtml(p.activeEventName)}</span>` : "";
 
   const priceHTML = p.isFlashSale && p.originalPrice
     ? `<p class="product-price">₨ ${formatMoney(p.price)} <del style="font-size:11px;color:#94a3b8;font-weight:400">₨ ${formatMoney(p.originalPrice)}</del></p>`
@@ -498,6 +502,7 @@ function productCardHTML(p) {
       <div class="product-img-wrap" onclick="openProduct('${p.id}')">
         <img src="${p.imageUrl || placeholderImg()}" alt="${escapeHtml(p.name)}" loading="lazy" />
         ${badge}
+        ${eventTag}
       </div>
       <button class="wishlist-btn ${inWishlist ? "active" : ""}" onclick="toggleWishlist('${p.id}')">
         <span class="material-icons-round">${inWishlist ? "favorite" : "favorite_border"}</span>
@@ -514,6 +519,138 @@ function productCardHTML(p) {
 
 // FIX 1: Removed the orphaned duplicate code block that was here between
 // renderHomeProducts and renderShopProducts, which caused "Illegal return statement".
+let platformSettings = {};
+let heroSlideTimer = null;
+let eventBoardTimerInterval = null;
+
+async function loadPlatformSettings() {
+  try {
+    const doc = await db.collection("platformSettings").doc("main").get();
+    platformSettings = doc.exists ? doc.data() : {};
+  } catch (err) {
+    console.error("platformSettings load error:", err);
+    platformSettings = {};
+  }
+}
+
+function renderEventHero() {
+  renderHeroSlider();
+  renderEventBoard();
+}
+
+// Hero slider is now independent of events — always scrolls every 4s if admin uploaded slides.
+function renderHeroSlider() {
+  const images = platformSettings.heroSlides || [];
+  const defaultHero = document.getElementById("defaultHeroBanner");
+  const slider = document.getElementById("eventHeroSlider");
+
+  if (heroSlideTimer) { clearInterval(heroSlideTimer); heroSlideTimer = null; }
+
+  if (!images.length) {
+    if (defaultHero) defaultHero.style.display = "";
+    if (slider) slider.style.display = "none";
+    return;
+  }
+
+  if (defaultHero) defaultHero.style.display = "none";
+  if (slider) slider.style.display = "block";
+
+  const slidesEl = document.getElementById("eventHeroSlides");
+  const dotsEl = document.getElementById("eventHeroDots");
+  slidesEl.innerHTML = images.map((url, i) => `<img class="event-hero-slide ${i === 0 ? "active" : ""}" src="${url}" alt="Slide" />`).join("");
+  dotsEl.innerHTML = images.map((_, i) => `<div class="event-hero-dot ${i === 0 ? "active" : ""}" onclick="goToHeroSlide(${i})"></div>`).join("");
+
+  let idx = 0;
+  const SLIDE_INTERVAL_MS = 4000;
+  if (images.length > 1) {
+    heroSlideTimer = setInterval(() => {
+      idx = (idx + 1) % images.length;
+      goToHeroSlide(idx);
+    }, SLIDE_INTERVAL_MS);
+  }
+}
+
+function goToHeroSlide(i) {
+  document.querySelectorAll(".event-hero-slide").forEach((el, idx) => el.classList.toggle("active", idx === i));
+  document.querySelectorAll(".event-hero-dot").forEach((el, idx) => el.classList.toggle("active", idx === i));
+}
+
+// Event board: countdown section + product grid + popup (separate from hero now)
+let eventBoardShownThisSession = false;
+
+function renderEventBoard() {
+  const event = platformSettings.activeEvent || null;
+  const start = event?.scheduledAt ? new Date(event.scheduledAt).getTime() : null;
+  const end = start ? start + (Number(event.durationDays) || 3) * 86400000 : null;
+  const isLive = !!(event && start && end && Date.now() >= start && Date.now() < end);
+
+  const eventSection = document.getElementById("eventSection");
+  const eventHeader = document.getElementById("eventProductsHeader");
+  const eventGrid = document.getElementById("eventProductGrid");
+
+  if (!isLive) {
+    if (eventSection) eventSection.style.display = "none";
+    if (eventHeader) eventHeader.style.display = "none";
+    if (eventGrid) eventGrid.innerHTML = "";
+    closeEventBoardPopup();
+    startFlashSaleCountdown();
+    return;
+  }
+
+  if (eventSection) eventSection.style.display = "flex";
+  if (eventHeader) eventHeader.style.display = "flex";
+  document.getElementById("eventTitle").textContent = event.name || "Event";
+  document.getElementById("eventProductsTitle").textContent = event.name || "Event Picks";
+
+  const eventProducts = (event.productIds || [])
+    .map(id => allProducts.find(p => p.id === id))
+    .filter(Boolean);
+  eventGrid.innerHTML = eventProducts.length
+    ? eventProducts.map(productCardHTML).join("")
+    : emptyState("storefront", "No products in this event yet");
+
+  startFlashSaleCountdown();
+  maybeShowEventBoardPopup(event, end);
+}
+
+function maybeShowEventBoardPopup(event, endsAtMs) {
+  if (eventBoardShownThisSession) return;
+  if (sessionStorage.getItem("eventBoardSeen_" + event.id)) { eventBoardShownThisSession = true; return; }
+
+  document.getElementById("eventBoardImage").src = event.bannerImageUrl || "";
+  document.getElementById("eventBoardTimerText").textContent = event.countdownText || "Hurry up! Time is going";
+  document.getElementById("eventBoardCta").textContent = event.ctaText || "Shop Now";
+  document.getElementById("eventBoardOverlay").style.display = "flex";
+  eventBoardShownThisSession = true;
+  sessionStorage.setItem("eventBoardSeen_" + event.id, "1");
+
+  if (eventBoardTimerInterval) clearInterval(eventBoardTimerInterval);
+  eventBoardTimerInterval = setInterval(() => {
+    const diff = endsAtMs - Date.now();
+    if (diff <= 0) { clearInterval(eventBoardTimerInterval); closeEventBoardPopup(); return; }
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    document.getElementById("ebH").textContent = String(h).padStart(2, "0");
+    document.getElementById("ebM").textContent = String(m).padStart(2, "0");
+    document.getElementById("ebS").textContent = String(s).padStart(2, "0");
+  }, 1000);
+}
+
+function closeEventBoardPopup() {
+  const overlay = document.getElementById("eventBoardOverlay");
+  if (overlay) overlay.style.display = "none";
+  if (eventBoardTimerInterval) { clearInterval(eventBoardTimerInterval); eventBoardTimerInterval = null; }
+}
+
+function handleEventBoardCta() {
+  closeEventBoardPopup();
+  showPage("home");
+  setTimeout(() => {
+    document.getElementById("eventSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 150);
+}
+
 function renderHomeProducts() {
   const el = document.getElementById("homeProductGrid");
   if (!el) return;
@@ -524,9 +661,12 @@ function renderHomeProducts() {
       <div class="skeleton skeleton-text-sm"></div>
     </div>`).join("");
   setTimeout(() => {
-    const trending = allProducts.filter(p => !p.isFlashSale).slice(0, 8);
-    el.innerHTML = trending.length
-      ? trending.map(productCardHTML).join("")
+    const featuredIds = platformSettings.homeFeaturedProductIds || [];
+    let list = featuredIds.length
+      ? featuredIds.map(id => allProducts.find(p => p.id === id)).filter(Boolean)
+      : allProducts.filter(p => !p.isFlashSale).slice(0, 8);
+    el.innerHTML = list.length
+      ? list.map(productCardHTML).join("")
       : emptyState("storefront", "No products yet", "Check back soon for new arrivals.");
   }, 300);
 }
@@ -675,6 +815,13 @@ function clearSearch() {
 /* =====================================================================
    PRODUCT DETAIL
 ===================================================================== */
+function openProductFromOrder(productId) {
+  if (!productId) return;
+  const exists = allProducts.find(p => p.id === productId);
+  if (!exists) return showToast("This product is no longer available.", "error");
+  openProduct(productId);
+}
+
 async function openProduct(id) {
   const p = allProducts.find((x) => x.id === id);
   if (!p) return;
@@ -1310,9 +1457,11 @@ const l2Active = l2Doc && l2Doc.exists && isUserActiveThisMonth(l2Doc.data());
 
     for (const item of items) {
       const lineTotal = item.price * item.qty;
+      const fullProduct = allProducts.find(p => p.id === item.id);
+      const boostPct = Number(fullProduct?.activeEventBoostPercent) || 0;
 
       if (l1Uid && l1Active) {
-        const amount = round2((lineTotal * L1_COMMISSION_PCT) / 100);
+        const amount = round2((lineTotal * (L1_COMMISSION_PCT + boostPct)) / 100);
         l1TotalCredit += amount;
         commissionsPaid.push({ uid: l1Uid, level: 1, amount, productId: item.id });
       }
@@ -1364,32 +1513,13 @@ sellerUids: [...new Set(items.map((i) => i.sellerUid).filter(Boolean))],
     await markUserActiveThisMonth(currentUser.uid);
 
     
-    // ---- 6. Credit commissions— only instantly for COD, wait for admin on online payments ----
-    if (paymentMethod === "cod") {
-      if (l1Uid && l1TotalCredit > 0) {
-        await db.collection("users").doc(l1Uid).update({
-          walletBalance: firebase.firestore.FieldValue.increment(l1TotalCredit),
-          totalEarned: firebase.firestore.FieldValue.increment(l1TotalCredit),
-        });
-        await logTransaction(l1Uid, "credit", l1TotalCredit, `Level 1 commission from order`, orderRef.id);
-        await notifyUser(l1Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l1TotalCredit)} from a referral purchase.`, { type: "commission_earned" });
-      }
-      if (l2Uid && l2TotalCredit > 0) {
-        await db.collection("users").doc(l2Uid).update({
-          walletBalance: firebase.firestore.FieldValue.increment(l2TotalCredit),
-          totalEarned: firebase.firestore.FieldValue.increment(l2TotalCredit),
-        });
-        await logTransaction(l2Uid, "credit", l2TotalCredit, `Level 2 commission from order`, orderRef.id);
-        await notifyUser(l2Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l2TotalCredit)} from your network's purchase.`, { type: "commission_earned" });
-      }
-    } else {
-      // For JazzCash, EasyPaisa, Bank — notify inviters to wait for admin verification
-      if (l1Uid && l1TotalCredit > 0) {
-        await notifyUser(l1Uid, "Commission Pending!", `₨ ${formatMoney(l1TotalCredit)} commission is pending payment verification.`, { type: "commission_earned" });
-      }
-      if (l2Uid && l2TotalCredit > 0) {
-        await notifyUser(l2Uid, "Commission Pending!", `₨ ${formatMoney(l2TotalCredit)} commission is pending payment verification.`, { type: "commission_earned" });
-      }
+    // ---- 6. Wallet split (Admin 15% / Seller 70% / L1 10% / L2 5%) now happens ONLY
+    // when the admin marks this order "delivered" — not here at placement time. ----
+    if (l1Uid && l1TotalCredit > 0) {
+      await notifyUser(l1Uid, "Commission Pending!", `₨ ${formatMoney(l1TotalCredit)} commission will be credited once this order is delivered.`, { type: "commission_earned" });
+    }
+    if (l2Uid && l2TotalCredit > 0) {
+      await notifyUser(l2Uid, "Commission Pending!", `₨ ${formatMoney(l2TotalCredit)} commission will be credited once this order is delivered.`, { type: "commission_earned" });
     }
     
 
@@ -1687,7 +1817,8 @@ function paintOrders(orders) {
           ${o.items.map((i, idx) => `
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
               <img src="${allProducts.find(p => p.id === i.productId)?.imageUrl || 'https://placehold.co/300x300/eef2ff/6366f1?text=Product'}"
-                style="width:52px;height:52px;object-fit:cover;border-radius:10px;border:1px solid #e2e8f0;flex-shrink:0;background:#f1f5f9"
+                style="width:52px;height:52px;object-fit:cover;border-radius:10px;border:1px solid #e2e8f0;flex-shrink:0;background:#f1f5f9;cursor:pointer"
+                onclick="openProductFromOrder('${i.productId}')"
                 onerror="this.src='https://placehold.co/300x300/eef2ff/6366f1?text=Product'" />
               <span style="font-size:13px;font-weight:500;color:var(--text);flex:1">${escapeHtml(i.name)} × ${i.qty}</span>
               ${i.status === 'delivered'
@@ -1739,7 +1870,7 @@ function copyInviteCode() {
 function shareInvite() {
   const link = `${window.location.origin}${window.location.pathname}?ref=${userData?.inviteCode}`;
   if (navigator.share) {
-    navigator.share({ title: "Join ShopEarn", text: "Shop and earn with me on ShopEarn!", url: link });
+    navigator.share({ title: "Join PK Mart", text: "Shop and earn with me on PK Mart!", url: link });
   } else {
     navigator.clipboard.writeText(link);
     showToast("Invite link copied!", "success");
@@ -1776,6 +1907,7 @@ function renderActivationBanner() {
   if (!banner) return;
 
   const active = isUserActiveThisMonth(userData);
+  renderMyCard(active);
 
   if (active) {
     banner.style.display = "block";
@@ -1845,6 +1977,39 @@ function renderActivationBanner() {
     });
   }
 }
+
+async function renderMyCard(active) {
+  const wrap = document.getElementById("myCardSection");
+  if (!wrap) return;
+  if (active) {
+    wrap.style.display = "block";
+    document.getElementById("myCardCode").textContent = userData?.inviteCode || "—";
+    document.getElementById("myCardName").textContent = userData?.name || "";
+
+    const statusEl = document.getElementById("myCardStatusMsg");
+    if (statusEl && currentUser) {
+      try {
+        const cardDoc = await db.collection("cards").doc(currentUser.uid).get();
+        const cardStatus = cardDoc.exists ? cardDoc.data().status : "pending";
+        if (cardStatus === "delivered") {
+          statusEl.textContent = "✅ Your physical card has been delivered to you.";
+          statusEl.style.color = "var(--success)";
+        } else if (cardStatus === "printed") {
+          statusEl.textContent = "📦 Your card is printed and will arrive with your next order.";
+          statusEl.style.color = "var(--text-secondary)";
+        } else {
+          statusEl.textContent = "🕓 Your card is being prepared. It will be printed soon and delivered with your first order.";
+          statusEl.style.color = "var(--text-secondary)";
+        }
+      } catch (err) {
+        statusEl.textContent = "Your printed card will arrive with your first order.";
+      }
+    }
+  } else {
+    wrap.style.display = "none";
+  }
+}
+
 async function activateReferralCode() {
   const method = document.querySelector('input[name="activationMethod"]:checked')?.value || "wallet";
 
@@ -1862,6 +2027,13 @@ async function activateReferralCode() {
 });
     await logTransaction(currentUser.uid, "debit", ACTIVATION_FEE, "Monthly referral code activation fee");
       await payActivationCommissions(currentUser.uid);
+      await db.collection("cards").doc(currentUser.uid).set({
+        uid: currentUser.uid,
+        name: userData.name || "",
+        code: userData.inviteCode || "",
+        status: "pending",
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
       await notifyUser(currentUser.uid, "Code Activated!", "Your referral code is now active. Start earning commissions!", { type: "commission_earned" });
       await refreshUserData();
       showToast("Referral code activated successfully! 🎉", "success");
@@ -1910,6 +2082,7 @@ async function payActivationCommissions(buyerUid) {
 
   const l1Uid = buyer.l1InviterUid || null;
   const l2Uid = buyer.l2InviterUid || null;
+  let paidOut = 0;
 
   if (l1Uid) {
     const l1Amount = round2((ACTIVATION_FEE * ACTIVATION_L1_PCT) / 100);
@@ -1919,6 +2092,7 @@ async function payActivationCommissions(buyerUid) {
     });
     await logTransaction(l1Uid, "credit", l1Amount, "Level 1 activation commission", null);
     await notifyUser(l1Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l1Amount)} because your referral activated their code.`, { type: "commission_earned" });
+    paidOut += l1Amount;
   }
 
   if (l2Uid) {
@@ -1929,6 +2103,23 @@ async function payActivationCommissions(buyerUid) {
     });
     await logTransaction(l2Uid, "credit", l2Amount, "Level 2 activation commission", null);
     await notifyUser(l2Uid, "You earned a commission!", `You earned ₨ ${formatMoney(l2Amount)} from your network's code activation.`, { type: "commission_earned" });
+    paidOut += l2Amount;
+  }
+
+  // Remainder of the activation fee goes to the Admin Wallet
+  const adminAmount = round2(ACTIVATION_FEE - paidOut);
+  if (adminAmount > 0) {
+    await db.collection("adminWallet").doc("main").set({
+      balance: firebase.firestore.FieldValue.increment(adminAmount),
+      totalEarned: firebase.firestore.FieldValue.increment(adminAmount),
+    }, { merge: true });
+    await db.collection("adminTransactions").add({
+      type: "activation_fee",
+      amount: adminAmount,
+      reason: `Code activation fee — ${buyer.name || "buyer"} (${buyer.inviteCode || buyerUid})`,
+      relatedOrderId: null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
   }
 }
 
@@ -2306,27 +2497,40 @@ function updateHeaderForSidebar() {
    FLASH SALE COUNTDOWN
 ===================================================================== */
 function startFlashSaleCountdown() {
-  // Countdown to the end of the current day (adjust as needed)
-  const getTarget = () => {
-    const t = new Date();
-    t.setHours(23, 59, 59, 999);
-    return t;
-  };
-  let target = getTarget();
+  if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+
+  // Featured products timer: 3 days from featuredStartedAt (admin sets/resets this)
+  const featuredStart = platformSettings.featuredStartedAt ? new Date(platformSettings.featuredStartedAt) : new Date();
+  const featuredTarget = new Date(featuredStart.getTime() + 3 * 86400000);
+
+  // Event timer: startAt + durationDays (only relevant while an event is live)
+  const event = platformSettings.activeEvent || null;
+  const eventTarget = event ? new Date(new Date(event.startAt).getTime() + (Number(event.durationDays) || 3) * 86400000) : null;
 
   countdownInterval = setInterval(() => {
     const now = new Date();
-    let diff = target - now;
-    if (diff <= 0) {
-      target = getTarget();
-      diff = target - now;
-    }
+
+    let diff = featuredTarget - now;
+    if (diff < 0) diff = 0;
     const h = Math.floor(diff / 3600000);
     const m = Math.floor((diff % 3600000) / 60000);
     const s = Math.floor((diff % 60000) / 1000);
-    document.getElementById("cdH").textContent = String(h).padStart(2, "0");
-    document.getElementById("cdM").textContent = String(m).padStart(2, "0");
-    document.getElementById("cdS").textContent = String(s).padStart(2, "0");
+    const cdH = document.getElementById("cdH"), cdM = document.getElementById("cdM"), cdS = document.getElementById("cdS");
+    if (cdH) cdH.textContent = String(h).padStart(2, "0");
+    if (cdM) cdM.textContent = String(m).padStart(2, "0");
+    if (cdS) cdS.textContent = String(s).padStart(2, "0");
+
+    if (eventTarget) {
+      let ediff = eventTarget - now;
+      if (ediff < 0) ediff = 0;
+      const eh = Math.floor(ediff / 3600000);
+      const em = Math.floor((ediff % 3600000) / 60000);
+      const es = Math.floor((ediff % 60000) / 1000);
+      const evH = document.getElementById("evH"), evM = document.getElementById("evM"), evS = document.getElementById("evS");
+      if (evH) evH.textContent = String(eh).padStart(2, "0");
+      if (evM) evM.textContent = String(em).padStart(2, "0");
+      if (evS) evS.textContent = String(es).padStart(2, "0");
+    }
   }, 1000);
 }
 
