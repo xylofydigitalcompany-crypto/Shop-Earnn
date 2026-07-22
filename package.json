@@ -1,0 +1,8 @@
+{
+     "name": "pk-mart",
+     "version": "1.0.0",
+     "type": "module",
+     "dependencies": {
+       "@sfpy/node-core": "^1.0.0"
+     }
+   }
