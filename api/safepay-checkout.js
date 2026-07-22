@@ -15,6 +15,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing orderId or amountPKR" });
   }
 
+  let trackerToken;
   try {
     const session = await safepay.payments.session.setup({
       merchant_api_key: process.env.SAFEPAY_PUBLIC_KEY,
@@ -25,26 +26,37 @@ export default async function handler(req, res) {
       amount: Math.round(amountPKR * 100),
       metadata: { order_id: orderId },
     });
-
-    const trackerToken = session?.data?.tracker?.token;
+    trackerToken = session?.data?.tracker?.token;
     if (!trackerToken) {
-      return res.status(500).json({ error: "Failed to create session", details: session });
+      return res.status(500).json({ step: "session.setup", error: "No tracker token", details: session });
     }
+  } catch (err) {
+    return res.status(500).json({ step: "session.setup", error: err.message });
+  }
 
+  let authTokenValue;
+  try {
     const authToken = await safepay.auth.passport.create();
+    authTokenValue = authToken?.data;
+    if (!authTokenValue) {
+      return res.status(500).json({ step: "auth.passport.create", error: "No auth token", details: authToken });
+    }
+  } catch (err) {
+    return res.status(500).json({ step: "auth.passport.create", error: err.message });
+  }
 
+  try {
     const origin = `https://${req.headers.host}`;
     const checkoutUrl = safepay.checkouts.payment.create({
       tracker: trackerToken,
-      tbt: authToken?.data,
+      tbt: authTokenValue,
       environment: "sandbox",
       source: "hosted",
       redirect_url: `${origin}/?safepay_order=${orderId}&tracker=${trackerToken}`,
       cancel_url: `${origin}/?safepay_order=${orderId}&tracker=${trackerToken}&cancelled=1`,
     });
-
     return res.status(200).json({ url: checkoutUrl, tracker: trackerToken });
   } catch (err) {
-    return res.status(500).json({ error: "Server error", details: err.message });
+    return res.status(500).json({ step: "checkouts.payment.create", error: err.message });
   }
 }
